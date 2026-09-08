@@ -47,31 +47,54 @@ jobs:
       - name: Install Tailscale
         run: |
           Write-Host "Installing Tailscale..." -ForegroundColor Green
-          # Download Tailscale installer
           Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale-setup.exe"
-          # Install silently
           Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
           Write-Host "Tailscale installed successfully!" -ForegroundColor Green
 
       - name: Authenticate Tailscale
+        id: tailscale_auth
         run: |
           Write-Host "Authenticating Tailscale..." -ForegroundColor Green
           $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
           if ([string]::IsNullOrEmpty($authKey)) {
-            Write-Host "ERROR: TAILSCALE_AUTH_KEY secret is not set!" -ForegroundColor Red
+            Write-Host "::error::TAILSCALE_AUTH_KEY secret is not set!"
             exit 1
           }
-          # Start Tailscale and authenticate
           Start-Process -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up --auth-key $authKey --accept-routes" -Wait
           Write-Host "Tailscale authenticated successfully!" -ForegroundColor Green
 
-      - name: Get Tailscale IP
+      - name: Get Tailscale IP with Retry
+        id: get_ip
         run: |
-          Write-Host "Getting Tailscale IP..." -ForegroundColor Green
-          Start-Sleep -Seconds 10
-          $tailscaleIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
-          $tailscaleIP = $tailscaleIP.Trim()
-          
+          Write-Host "Waiting for Tailscale IP..." -ForegroundColor Green
+          $tailscaleIP = $null
+          $retries = 0
+          $maxRetries = 30
+          while ($retries -lt $maxRetries) {
+            $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($ip) {
+              $tailscaleIP = $ip.Trim()
+              Write-Host "Tailscale IP obtained: $tailscaleIP" -ForegroundColor Green
+              break
+            }
+            Write-Host "Waiting for Tailscale IP... attempt $($retries+1)/$maxRetries" -ForegroundColor Yellow
+            Start-Sleep -Seconds 3
+            $retries++
+          }
+          if ($tailscaleIP) {
+            Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$tailscaleIP"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "ip=$tailscaleIP"
+          } else {
+            Write-Host "::error::Could not obtain Tailscale IP after $maxRetries attempts."
+            Write-Host "Dumping Tailscale status for debugging:"
+            & "C:\Program Files\Tailscale\tailscale.exe" status
+            exit 1
+          }
+
+      - name: Show Connection Details
+        if: success()
+        run: |
+          $tailscaleIP = "${{ steps.get_ip.outputs.ip }}"
           Write-Host "`n=== CONNECTION DETAILS ===" -ForegroundColor Green
           Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
           Write-Host "║         TAILSCALE RDP ACCESS          ║" -ForegroundColor Cyan
@@ -80,7 +103,7 @@ jobs:
           Write-Host "║ Username: runneradmin                ║" -ForegroundColor White
           Write-Host "║ Password: P@ssw0rd!                  ║" -ForegroundColor White
           Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Cyan
-          
+
           Write-Host "`nConnection Instructions:" -ForegroundColor Yellow
           Write-Host "1. Install Tailscale on your device" -ForegroundColor White
           Write-Host "2. Login with the same Tailscale account" -ForegroundColor White
