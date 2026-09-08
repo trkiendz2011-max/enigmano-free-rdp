@@ -18,146 +18,138 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # === 1. TỔNG QUAN HỆ THỐNG ===
       - name: System Information
         run: |
           Write-Host "=== ENIGMANO RDP DEPLOYMENT ===" -ForegroundColor Green
           Write-Host "Instance Number: ${{ github.event.inputs.instance_number }}" -ForegroundColor Yellow
-          Write-Host "Runner: $env:RUNNER_NAME" -ForegroundColor Yellow
-          Write-Host "Workflow: $env:GITHUB_WORKFLOW" -ForegroundColor Yellow
-          Write-Host "`n=== SYSTEM SPECIFICATIONS ===" -ForegroundColor Cyan
-          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, TotalPhysicalMemory
-          Get-WmiObject -Class Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+          Write-Host "Runner Name: $env:RUNNER_NAME" -ForegroundColor Yellow
+          Write-Host "`n=== HARDWARE SPECS ===" -ForegroundColor Cyan
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, TotalVisibleMemorySize
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
 
-      # === CÀI ĐẶT PHẦN MỀM CƠ BẢN ===
+      # === 2. CÀI ĐẶT PHẦN MỀM CHUẨN (DÙNG CURL TRÁNH ĐƠ) ===
       - name: Pre-install Essential Software
         run: |
-          Write-Host "Installing Chocolatey & Apps..." -ForegroundColor Green
+          Write-Host "Installing Essential Apps via Chocolatey..." -ForegroundColor Green
           Set-ExecutionPolicy Bypass -Scope Process -Force
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-          choco install googlechrome 7zip python3 -y --no-progress
-          
-          # Cập nhật PATH cho Python
-          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+          choco install googlechrome 7zip -y --no-progress --ignore-checksums --force
 
-      # === TỐI ƯU HỆ THỐNG & ÂM THANH ===
-      - name: Optimize System Performance & Audio
+      # === 3. CẤU HÌNH TÀI KHOẢN & BẬT RDP HOÀN HẢO ===
+      - name: Enable RDP & Setup User Account
         run: |
-          Write-Host "Optimizing System Performance..." -ForegroundColor Green
+          Write-Host "Setting up User Account & RDP Policy..." -ForegroundColor Green
           
-          # Tắt dịch vụ ngầm gây tốn tài nguyên
-          Stop-Service -Name "wuauserv", "sysmain", "WSearch" -ErrorAction SilentlyContinue
-          "wuauserv", "sysmain", "WSearch" | ForEach-Object { Set-Service -Name $_ -StartupType Disabled -ErrorAction SilentlyContinue }
-          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
-          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 2
+          # Đảm bảo mật khẩu tài khoản runneradmin
+          net user runneradmin "P@ssw0rd!" /add 2>$null
+          net user runneradmin "P@ssw0rd!"
+          net localgroup "Remote Desktop Users" runneradmin /add 2>$null
+          net localgroup "Administrators" runneradmin /add 2>$null
+          wmic useraccount where name='runneradmin' set PasswordExpires=False 2>$null
 
-          # Bật Âm thanh RDP
+          # Mở RDP, tắt NLA để kết nối từ mọi thiết bị mượt mà
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+
+          # Giữ Console Session mở liên tục (Sửa lỗi chụp màn hình đen khi ngắt RDP)
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "DisableLockWorkstation" -Value 1
+
+      # === 4. TỐI ƯU HIỆU NĂNG, MẠNG & ÂM THANH ===
+      - name: Optimize System, Network & Audio
+        run: |
+          Write-Host "Optimizing Windows Performance..." -ForegroundColor Green
+          
+          # Tắt bớt các service tốn tài nguyên
+          $services = @("wuauserv", "sysmain", "WSearch")
+          foreach ($svc in $services) {
+            Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+            Set-Service -Name $svc -StartupType Disabled -ErrorAction SilentlyContinue
+          }
+          
+          # Bật Âm thanh qua RDP
           Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic -ErrorAction SilentlyContinue
           Start-Service -Name "AudioEndpointBuilder" -ErrorAction SilentlyContinue
           Set-Service -Name "Audiosrv" -StartupType Automatic -ErrorAction SilentlyContinue
           Start-Service -Name "Audiosrv" -ErrorAction SilentlyContinue
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "fDisableAudio" -Value 0
 
-      # === TỐI ƯU MẠNG & GIẢM LAG RDP ===
-      - name: Optimize Network & RDP Smoothness
-        run: |
-          Write-Host "Optimizing Network TCP/IP & RDP Performance..." -ForegroundColor Green
-          
-          $netKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
-          Set-ItemProperty -Path $netKey -Name "NetworkThrottlingIndex" -Value 0xffffffff
-          Set-ItemProperty -Path $netKey -Name "SystemResponsiveness" -Value 0
-
-          $tsPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
-          if (!(Test-Path $tsPolicy)) { New-Item -Path $tsPolicy -Force }
-          Set-ItemProperty -Path $tsPolicy -Name "fEnableWiggling" -Value 0
-          Set-ItemProperty -Path $tsPolicy -Name "bEnablerdpsguid" -Value 1
-
-      # === GIẢ LẬP GPU ẢO VỚI MESA3D ===
+      # === 5. CÀI MESA3D (GIẢ LẬP GPU OPENGL) AN TOÀN ===
       - name: Install Mesa3D Software GPU
         run: |
-          Write-Host "Setting up Mesa3D Software OpenGL/DirectX GPU..." -ForegroundColor Green
-          $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/download/23.1.5/mesa3d-23.1.5-release-msvc.7z"
-          $outputZip = "$env:TEMP\mesa3d.7z"
-          $extractPath = "C:\Mesa3D"
-          
-          Invoke-WebRequest -Uri $mesaUrl -OutFile $outputZip -ErrorAction SilentlyContinue
-          if (Test-Path $outputZip) {
-            & "C:\Program Files\7-Zip\7z.exe" x $outputZip -o"$extractPath" -y | Out-Null
-            Write-Host "Mesa3D installed successfully!" -ForegroundColor Green
-          } else {
-            Write-Host "Skipping Mesa3D download." -ForegroundColor Yellow
+          Write-Host "Downloading & Installing Mesa3D Software GPU..." -ForegroundColor Green
+          try {
+            $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/download/23.1.5/mesa3d-23.1.5-release-msvc.7z"
+            $outputZip = "$env:TEMP\mesa3d.7z"
+            
+            curl.exe -sSL "$mesaUrl" -o "$outputZip"
+            if (Test-Path $outputZip) {
+              & "C:\Program Files\7-Zip\7z.exe" x "$outputZip" -o"C:\Mesa3D" -y | Out-Null
+              Write-Host "Mesa3D installed successfully!" -ForegroundColor Green
+            }
+          } catch {
+            Write-Host "Mesa3D install skipped safely." -ForegroundColor Yellow
           }
 
-      - name: Enable RDP
-        run: |
-          Write-Host "Enabling Remote Desktop..." -ForegroundColor Green
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
-
-      - name: Create User Account
-        run: |
-          Write-Host "Setting up user account..." -ForegroundColor Green
-          $Password = ConvertTo-SecureString "P@ssw0rd!" -AsPlainText -Force
-          Set-LocalUser -Name "runneradmin" -Password $Password
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin"
-
-      - name: Install Tailscale
+      # === 6. CÀI ĐẶT & BẬT TAILSCALE ===
+      - name: Install and Authenticate Tailscale
+        id: get_ip
         run: |
           Write-Host "Installing Tailscale..." -ForegroundColor Green
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale-setup.exe"
+          curl.exe -sSL "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -o "tailscale-setup.exe"
           Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
 
-      - name: Authenticate Tailscale
-        id: tailscale_auth
-        run: |
-          Write-Host "Authenticating Tailscale..." -ForegroundColor Green
           $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
           if ([string]::IsNullOrEmpty($authKey)) {
             Write-Host "::error::TAILSCALE_AUTH_KEY secret is not set!"
             exit 1
           }
-          Start-Process -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up --auth-key $authKey --accept-routes" -Wait
 
-      - name: Get Tailscale IP with Retry
-        id: get_ip
-        run: |
-          Write-Host "Waiting for Tailscale IP..." -ForegroundColor Green
+          Write-Host "Connecting to Tailscale Network..." -ForegroundColor Green
+          & "C:\Program Files\Tailscale\tailscale.exe" up --auth-key $authKey --accept-routes --hostname "github-rdp-${{ github.event.inputs.instance_number }}"
+
+          # Lấy IP Tailscale
           $tailscaleIP = $null
-          $retries = 0
-          while ($retries -lt 30) {
+          for ($i = 0; $i -lt 30; $i++) {
             $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
             if ($ip) {
               $tailscaleIP = $ip.Trim()
               break
             }
-            Start-Sleep -Seconds 3
-            $retries++
+            Start-Sleep -Seconds 2
           }
+
           if ($tailscaleIP) {
+            Write-Host "Tailscale IP: $tailscaleIP" -ForegroundColor Green
+            
+            # Đặt biến môi trường hệ thống để Bot Python luôn đọc được
+            [System.Environment]::SetEnvironmentVariable("TAILSCALE_IP", $tailscaleIP, "Machine")
+            [System.Environment]::SetEnvironmentVariable("DISCORD_BOT_TOKEN", "${{ secrets.DISCORD_BOT_TOKEN }}", "Machine")
+            
             Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$tailscaleIP"
             Add-Content -Path $env:GITHUB_OUTPUT -Value "ip=$tailscaleIP"
           } else {
+            Write-Host "Failed to obtain Tailscale IP!" -ForegroundColor Red
             exit 1
           }
 
-      # === KHỞI TẠO VÀ CHẠY BOT DISCORD NÂNG CẤP ===
-      - name: Setup & Run Interactive Discord Bot with Safe Watchdog
+      # === 7. CAO CẤP: BOT DISCORD & WATCHDOG TỰ HỒI PHỤC ===
+      - name: Setup & Launch Interactive Discord Bot
         shell: powershell
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          TAILSCALE_IP: ${{ steps.get_ip.outputs.ip }}
         run: |
-          Write-Host "Creating Full Discord Bot Script..." -ForegroundColor Green
-          
+          Write-Host "Installing Python Requirements..." -ForegroundColor Green
+          python -m pip install --upgrade pip --quiet
+          python -m pip install discord.py mss Pillow psutil --quiet
+
+          Write-Host "Generating Discord Bot Code..." -ForegroundColor Green
           $pythonCode = @'
 import os
+import sys
 import time
 import asyncio
 import discord
 import psutil
 from mss import mss
-from PIL import Image
 from discord.ext import commands, tasks
 from discord.ui import Button, View
 
@@ -171,7 +163,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 start_time = time.time()
 last_channel = None
 
-# === HÀM XUẤT FILE / LOG ===
 async def send_file_action(target, file_path: str):
     if not os.path.exists(file_path):
         msg = f"❌ File không tồn tại: `{file_path}`"
@@ -186,13 +177,12 @@ async def send_file_action(target, file_path: str):
 
     try:
         file = discord.File(file_path)
-        msg = f"📁 **Đã gửi file thành công:** `{os.path.basename(file_path)}`"
+        msg = f"📁 **File:** `{os.path.basename(file_path)}`"
         await (target.followup.send(content=msg, file=file) if isinstance(target, discord.Interaction) else target.send(content=msg, file=file))
     except Exception as e:
-        err_msg = f"❌ Lỗi khi gửi file: `{str(e)}`"
+        err_msg = f"❌ Lỗi gửi file: `{str(e)}`"
         await (target.followup.send(err_msg) if isinstance(target, discord.Interaction) else target.send(err_msg))
 
-# === CHỤP MÀN HÌNH ===
 async def capture_screen_action(target):
     try:
         shot_path = "C:\\screenshot.png"
@@ -214,16 +204,13 @@ async def capture_screen_action(target):
         else:
             await target.send(msg)
 
-# === THÔNG SỐ CẤU HÌNH (QUAN SÁT TẤT CẢ Ổ ĐĨA C:, D:) ===
 async def show_specs_action(target):
     cpu_usage = psutil.cpu_percent(interval=1)
     ram = psutil.virtual_memory()
     
-    # Đọc dung lượng Ổ C:
     disk_c = psutil.disk_usage("C:\\")
     disk_c_free = round(disk_c.free / (1024**3), 2)
     
-    # Đọc dung lượng Ổ D: (nếu có)
     disk_d_str = "N/A"
     if os.path.exists("D:\\"):
         disk_d = psutil.disk_usage("D:\\")
@@ -243,7 +230,6 @@ async def show_specs_action(target):
     else:
         await target.send(embed=embed)
 
-# === TRẠNG THÁI RDP ===
 async def show_status_action(target):
     uptime_seconds = int(time.time() - start_time)
     hours, remainder = divmod(uptime_seconds, 3600)
@@ -255,14 +241,13 @@ async def show_status_action(target):
     embed.add_field(name="👤 Username", value="`runneradmin`", inline=True)
     embed.add_field(name="🔑 Password", value="`P@ssw0rd!`", inline=True)
     embed.add_field(name="⏱️ Uptime", value=f"`{uptime_str}`", inline=False)
-    embed.set_footer(text="AMD EPYC 80-Core | Giới hạn 6 tiếng / Run")
+    embed.set_footer(text="Giới hạn tối đa 6 tiếng / Workflow run")
 
     if isinstance(target, discord.Interaction):
         await target.followup.send(embed=embed)
     else:
         await target.send(embed=embed)
 
-# === GIAO DIỆN NÚT BẤM INTERACTIVE ===
 class RDPControlView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -282,14 +267,13 @@ class RDPControlView(View):
         await interaction.response.defer()
         await show_specs_action(interaction)
 
-# === TASK CẢNH BÁO TỰ ĐỘNG KHI CHẠY ĐƯỢC 5H45M ===
 @tasks.loop(seconds=1, count=1)
 async def timeout_warning_task():
-    await asyncio.sleep(20700)
+    await asyncio.sleep(20700) # 5 tiếng 45 phút
     if last_channel:
         embed = discord.Embed(
             title="⚠️ CẢNH BÁO: MÁY ẢO SẮP TẮT!",
-            description="Runner đã chạy được **5 tiếng 45 phút**. Hệ thống sẽ tự động đóng sau **15 phút** nữa!",
+            description="Runner đã chạy được **5 tiếng 45 phút**. Máy sẽ ngắt kết nối sau **15 phút** nữa!",
             color=0xe74c3c
         )
         await last_channel.send(content="@everyone", embed=embed)
@@ -305,7 +289,7 @@ async def on_ready():
                 try:
                     embed = discord.Embed(
                         title="🚀 RDP ONLINE & SẴN SÀNG!",
-                        description=f"Máy ảo AMD EPYC vừa khởi động thành công.\n• Tailscale IP: `{TAILSCALE_IP}`\n• User: `runneradmin` | Pass: `P@ssw0rd!`",
+                        description=f"Máy ảo vừa khởi động thành công.\n• Tailscale IP: `{TAILSCALE_IP}`\n• User: `runneradmin` | Pass: `P@ssw0rd!`",
                         color=0x2ecc71
                     )
                     await channel.send(embed=embed, view=RDPControlView())
@@ -325,7 +309,7 @@ async def show_menu(ctx):
         title="📋 HỆ THỐNG QUẢN LÝ RDP",
         description="Bấm nút bên dưới hoặc gõ lệnh:\n"
                     "• `!getfile <path>` - Tải file từ máy về Discord\n"
-                    "• `!log` - Tải file log mặc định",
+                    "• `!log` - Tải file log hệ thống",
         color=0x3498db
     )
     await ctx.send(embed=embed, view=RDPControlView())
@@ -341,7 +325,7 @@ async def cmd_getfile(ctx, *, file_path: str):
 async def cmd_log(ctx):
     global last_channel
     last_channel = ctx.channel
-    await send_file_action(ctx, "C:\\app_log.txt")
+    await send_file_action(ctx, "C:\\bot_app.log")
 
 @bot.command(name="status")
 async def cmd_status(ctx):
@@ -364,20 +348,20 @@ async def cmd_specs(ctx):
 if __name__ == "__main__":
     if TOKEN:
         bot.run(TOKEN)
+    else:
+        print("Error: DISCORD_BOT_TOKEN is empty!")
 '@
           Set-Content -Path "C:\discord_bot.py" -Value $pythonCode -Encoding UTF8
 
-          Write-Host "Installing Python libraries..." -ForegroundColor Green
-          python -m pip install --upgrade pip --quiet
-          pip install discord.py mss Pillow psutil --quiet
+          # Khởi chạy Bot Python với Output Log
+          Start-Process python -ArgumentList "C:\discord_bot.py" -RedirectStandardOutput "C:\bot_app.log" -RedirectStandardError "C:\bot_app.log" -WindowStyle Hidden
 
-          # AN TOÀN HƠN: WATCHDOG KIỂM TRA CHÍNH XÁC SCRIPT DISCORD_BOT.PY
+          # Watchdog thông minh kiểm tra định kỳ 15 giây
           $watchdogCode = @'
           while ($true) {
-              $process = Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -like "*discord_bot.py*" }
-              if (-not $process) {
-                  Write-Host "Bot Python process stopped. Restarting..."
-                  Start-Process python -ArgumentList "C:\discord_bot.py" -WindowStyle Hidden
+              $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*discord_bot.py*" }
+              if (-not $proc) {
+                  Start-Process python -ArgumentList "C:\discord_bot.py" -RedirectStandardOutput "C:\bot_app.log" -RedirectStandardError "C:\bot_app.log" -WindowStyle Hidden
               }
               Start-Sleep -Seconds 15
           }
@@ -385,16 +369,32 @@ if __name__ == "__main__":
           Set-Content -Path "C:\watchdog.ps1" -Value $watchdogCode -Encoding UTF8
           Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File C:\watchdog.ps1" -WindowStyle Hidden
 
-      # === TREO SỐNG SESSION & TỰ ĐỘNG DỌN RAM MỖI 5 PHÚT ===
-      - name: Keep Session Alive & Auto RAM Cleaner
+      # === 8. DUY TRÌ RUNNER & DỌN DẸP BỘ NHỚ RAM CHUYÊN SÂU (WIN32 API) ===
+      - name: Keep Session Alive & Win32 Memory Cleaner
         run: |
-          Write-Host "`n=== SESSION ACTIVE WITH AUTO RAM CLEANER (EVERY 5 MINS) ===" -ForegroundColor Green
+          Write-Host "`n=== RDP SESSION IS ACTIVE & RUNNING (MAX 6 HOURS) ===" -ForegroundColor Green
+          
+          # Biên dịch hàm Win32 API dọn RAM thực sự cho Windows
+          $code = @'
+          using System;
+          using System.Runtime.InteropServices;
+          public class MemoryCleaner {
+              [DllImport("kernel32.dll")]
+              public static extern bool SetProcessWorkingSetSize(IntPtr proc, IntPtr min, IntPtr max);
+              public static void TrimAll() {
+                  foreach (System.Diagnostics.Process p in System.Diagnostics.Process.GetProcesses()) {
+                      try { SetProcessWorkingSetSize(p.Handle, (IntPtr)(-1), (IntPtr)(-1)); }
+                      catch {}
+                  }
+              }
+          }
+'@
+          Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+
           $counter = 0
           while ($true) {
             $counter++
-            [System.GC]::Collect()
-            [System.GC]::WaitForPendingFinalizers()
-            
-            Write-Host "Session active & RAM Cleaned - Heartbeat #$counter ($(Get-Date))" -ForegroundColor Cyan
+            [MemoryCleaner]::TrimAll()
+            Write-Host "Heartbeat #$counter - System Active & RAM Cleaned - ($(Get-Date))" -ForegroundColor Cyan
             Start-Sleep -Seconds 300
           }
