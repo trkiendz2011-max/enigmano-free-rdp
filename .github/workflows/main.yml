@@ -1,0 +1,400 @@
+name: EnigMano RDP via Tailscale
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_number:
+        description: 'Instance Number (1-10)'
+        required: true
+        default: '1'
+        type: string
+
+jobs:
+  deploy-rdp:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: System Information
+        run: |
+          Write-Host "=== ENIGMANO RDP DEPLOYMENT ===" -ForegroundColor Green
+          Write-Host "Instance Number: ${{ github.event.inputs.instance_number }}" -ForegroundColor Yellow
+          Write-Host "Runner: $env:RUNNER_NAME" -ForegroundColor Yellow
+          Write-Host "Workflow: $env:GITHUB_WORKFLOW" -ForegroundColor Yellow
+          Write-Host "`n=== SYSTEM SPECIFICATIONS ===" -ForegroundColor Cyan
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, TotalPhysicalMemory
+          Get-WmiObject -Class Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+
+      # === CÀI ĐẶT PHẦN MỀM CƠ BẢN ===
+      - name: Pre-install Essential Software
+        run: |
+          Write-Host "Installing Chocolatey & Apps..." -ForegroundColor Green
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          choco install googlechrome 7zip python3 -y --no-progress
+          
+          # Cập nhật PATH cho Python
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+      # === TỐI ƯU HỆ THỐNG & ÂM THANH ===
+      - name: Optimize System Performance & Audio
+        run: |
+          Write-Host "Optimizing System Performance..." -ForegroundColor Green
+          
+          # Tắt dịch vụ ngầm gây tốn tài nguyên
+          Stop-Service -Name "wuauserv", "sysmain", "WSearch" -ErrorAction SilentlyContinue
+          "wuauserv", "sysmain", "WSearch" | ForEach-Object { Set-Service -Name $_ -StartupType Disabled -ErrorAction SilentlyContinue }
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 2
+
+          # Bật Âm thanh RDP
+          Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name "AudioEndpointBuilder" -ErrorAction SilentlyContinue
+          Set-Service -Name "Audiosrv" -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name "Audiosrv" -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "fDisableAudio" -Value 0
+
+      # === TỐI ƯU MẠNG & GIẢM LAG RDP ===
+      - name: Optimize Network & RDP Smoothness
+        run: |
+          Write-Host "Optimizing Network TCP/IP & RDP Performance..." -ForegroundColor Green
+          
+          $netKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
+          Set-ItemProperty -Path $netKey -Name "NetworkThrottlingIndex" -Value 0xffffffff
+          Set-ItemProperty -Path $netKey -Name "SystemResponsiveness" -Value 0
+
+          $tsPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+          if (!(Test-Path $tsPolicy)) { New-Item -Path $tsPolicy -Force }
+          Set-ItemProperty -Path $tsPolicy -Name "fEnableWiggling" -Value 0
+          Set-ItemProperty -Path $tsPolicy -Name "bEnablerdpsguid" -Value 1
+
+      # === GIẢ LẬP GPU ẢO VỚI MESA3D ===
+      - name: Install Mesa3D Software GPU
+        run: |
+          Write-Host "Setting up Mesa3D Software OpenGL/DirectX GPU..." -ForegroundColor Green
+          $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/download/23.1.5/mesa3d-23.1.5-release-msvc.7z"
+          $outputZip = "$env:TEMP\mesa3d.7z"
+          $extractPath = "C:\Mesa3D"
+          
+          Invoke-WebRequest -Uri $mesaUrl -OutFile $outputZip -ErrorAction SilentlyContinue
+          if (Test-Path $outputZip) {
+            & "C:\Program Files\7-Zip\7z.exe" x $outputZip -o"$extractPath" -y | Out-Null
+            Write-Host "Mesa3D installed successfully!" -ForegroundColor Green
+          } else {
+            Write-Host "Skipping Mesa3D download." -ForegroundColor Yellow
+          }
+
+      - name: Enable RDP
+        run: |
+          Write-Host "Enabling Remote Desktop..." -ForegroundColor Green
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+
+      - name: Create User Account
+        run: |
+          Write-Host "Setting up user account..." -ForegroundColor Green
+          $Password = ConvertTo-SecureString "P@ssw0rd!" -AsPlainText -Force
+          Set-LocalUser -Name "runneradmin" -Password $Password
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin"
+
+      - name: Install Tailscale
+        run: |
+          Write-Host "Installing Tailscale..." -ForegroundColor Green
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale-setup.exe"
+          Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
+
+      - name: Authenticate Tailscale
+        id: tailscale_auth
+        run: |
+          Write-Host "Authenticating Tailscale..." -ForegroundColor Green
+          $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
+          if ([string]::IsNullOrEmpty($authKey)) {
+            Write-Host "::error::TAILSCALE_AUTH_KEY secret is not set!"
+            exit 1
+          }
+          Start-Process -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up --auth-key $authKey --accept-routes" -Wait
+
+      - name: Get Tailscale IP with Retry
+        id: get_ip
+        run: |
+          Write-Host "Waiting for Tailscale IP..." -ForegroundColor Green
+          $tailscaleIP = $null
+          $retries = 0
+          while ($retries -lt 30) {
+            $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($ip) {
+              $tailscaleIP = $ip.Trim()
+              break
+            }
+            Start-Sleep -Seconds 3
+            $retries++
+          }
+          if ($tailscaleIP) {
+            Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$tailscaleIP"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "ip=$tailscaleIP"
+          } else {
+            exit 1
+          }
+
+      # === KHỞI TẠO VÀ CHẠY BOT DISCORD NÂNG CẤP ===
+      - name: Setup & Run Interactive Discord Bot with Safe Watchdog
+        shell: powershell
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          TAILSCALE_IP: ${{ steps.get_ip.outputs.ip }}
+        run: |
+          Write-Host "Creating Full Discord Bot Script..." -ForegroundColor Green
+          
+          $pythonCode = @'
+import os
+import time
+import asyncio
+import discord
+import psutil
+from mss import mss
+from PIL import Image
+from discord.ext import commands, tasks
+from discord.ui import Button, View
+
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+TAILSCALE_IP = os.getenv("TAILSCALE_IP", "Unknown IP")
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+start_time = time.time()
+last_channel = None
+
+# === HÀM XUẤT FILE / LOG ===
+async def send_file_action(target, file_path: str):
+    if not os.path.exists(file_path):
+        msg = f"❌ File không tồn tại: `{file_path}`"
+        await (target.followup.send(msg) if isinstance(target, discord.Interaction) else target.send(msg))
+        return
+
+    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    if file_size_mb > 25:
+        msg = f"⚠️ File quá lớn (`{file_size_mb:.2f} MB`). Giới hạn Discord: **25 MB**."
+        await (target.followup.send(msg) if isinstance(target, discord.Interaction) else target.send(msg))
+        return
+
+    try:
+        file = discord.File(file_path)
+        msg = f"📁 **Đã gửi file thành công:** `{os.path.basename(file_path)}`"
+        await (target.followup.send(content=msg, file=file) if isinstance(target, discord.Interaction) else target.send(content=msg, file=file))
+    except Exception as e:
+        err_msg = f"❌ Lỗi khi gửi file: `{str(e)}`"
+        await (target.followup.send(err_msg) if isinstance(target, discord.Interaction) else target.send(err_msg))
+
+# === CHỤP MÀN HÌNH ===
+async def capture_screen_action(target):
+    try:
+        shot_path = "C:\\screenshot.png"
+        with mss() as sct:
+            sct.shot(output=shot_path)
+        
+        file = discord.File(shot_path, filename="screenshot.png")
+        embed = discord.Embed(title="🖼️ Màn hình RDP Hiện Tại", color=0x9b59b6)
+        embed.set_image(url="attachment://screenshot.png")
+        
+        if isinstance(target, discord.Interaction):
+            await target.followup.send(file=file, embed=embed)
+        else:
+            await target.send(file=file, embed=embed)
+    except Exception as e:
+        msg = f"❌ Không thể chụp màn hình: `{str(e)}`"
+        if isinstance(target, discord.Interaction):
+            await target.followup.send(msg)
+        else:
+            await target.send(msg)
+
+# === THÔNG SỐ CẤU HÌNH (QUAN SÁT TẤT CẢ Ổ ĐĨA C:, D:) ===
+async def show_specs_action(target):
+    cpu_usage = psutil.cpu_percent(interval=1)
+    ram = psutil.virtual_memory()
+    
+    # Đọc dung lượng Ổ C:
+    disk_c = psutil.disk_usage("C:\\")
+    disk_c_free = round(disk_c.free / (1024**3), 2)
+    
+    # Đọc dung lượng Ổ D: (nếu có)
+    disk_d_str = "N/A"
+    if os.path.exists("D:\\"):
+        disk_d = psutil.disk_usage("D:\\")
+        disk_d_str = f"{round(disk_d.free / (1024**3), 2)} GB"
+
+    ram_used_gb = round(ram.used / (1024**3), 2)
+    ram_total_gb = round(ram.total / (1024**3), 2)
+
+    embed = discord.Embed(title="📊 TÌNH TRẠNG TÀI NGUYÊN MÁY ẢO", color=0xf1c40f)
+    embed.add_field(name="⚡ CPU Usage", value=f"`{cpu_usage}%`", inline=True)
+    embed.add_field(name="🧠 RAM Usage", value=f"`{ram_used_gb} GB / {ram_total_gb} GB ({ram.percent}%)`", inline=True)
+    embed.add_field(name="💾 Disk (C:) Free", value=f"`{disk_c_free} GB`", inline=True)
+    embed.add_field(name="💾 Disk (D:) Free", value=f"`{disk_d_str}`", inline=True)
+
+    if isinstance(target, discord.Interaction):
+        await target.followup.send(embed=embed)
+    else:
+        await target.send(embed=embed)
+
+# === TRẠNG THÁI RDP ===
+async def show_status_action(target):
+    uptime_seconds = int(time.time() - start_time)
+    hours, remainder = divmod(uptime_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{hours}h {minutes}m {seconds}s"
+
+    embed = discord.Embed(title="🖥️ THÔNG TIN MÁY ẢO RDP", color=0x2ecc71)
+    embed.add_field(name="🌐 Tailscale IP", value=f"`{TAILSCALE_IP}`", inline=True)
+    embed.add_field(name="👤 Username", value="`runneradmin`", inline=True)
+    embed.add_field(name="🔑 Password", value="`P@ssw0rd!`", inline=True)
+    embed.add_field(name="⏱️ Uptime", value=f"`{uptime_str}`", inline=False)
+    embed.set_footer(text="AMD EPYC 80-Core | Giới hạn 6 tiếng / Run")
+
+    if isinstance(target, discord.Interaction):
+        await target.followup.send(embed=embed)
+    else:
+        await target.send(embed=embed)
+
+# === GIAO DIỆN NÚT BẤM INTERACTIVE ===
+class RDPControlView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Status", style=discord.ButtonStyle.green, emoji="🖥️")
+    async def status_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()
+        await show_status_action(interaction)
+
+    @discord.ui.button(label="Screenshot", style=discord.ButtonStyle.primary, emoji="📸")
+    async def screenshot_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()
+        await capture_screen_action(interaction)
+
+    @discord.ui.button(label="Specs", style=discord.ButtonStyle.secondary, emoji="📊")
+    async def specs_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()
+        await show_specs_action(interaction)
+
+# === TASK CẢNH BÁO TỰ ĐỘNG KHI CHẠY ĐƯỢC 5H45M ===
+@tasks.loop(seconds=1, count=1)
+async def timeout_warning_task():
+    await asyncio.sleep(20700)
+    if last_channel:
+        embed = discord.Embed(
+            title="⚠️ CẢNH BÁO: MÁY ẢO SẮP TẮT!",
+            description="Runner đã chạy được **5 tiếng 45 phút**. Hệ thống sẽ tự động đóng sau **15 phút** nữa!",
+            color=0xe74c3c
+        )
+        await last_channel.send(content="@everyone", embed=embed)
+
+@bot.event
+async def on_ready():
+    print(f"Bot connected: {bot.user.name}")
+    timeout_warning_task.start()
+    
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channel.permissions_for(guild.me).send_messages:
+                try:
+                    embed = discord.Embed(
+                        title="🚀 RDP ONLINE & SẴN SÀNG!",
+                        description=f"Máy ảo AMD EPYC vừa khởi động thành công.\n• Tailscale IP: `{TAILSCALE_IP}`\n• User: `runneradmin` | Pass: `P@ssw0rd!`",
+                        color=0x2ecc71
+                    )
+                    await channel.send(embed=embed, view=RDPControlView())
+                    global last_channel
+                    last_channel = channel
+                    break
+                except:
+                    continue
+        if last_channel:
+            break
+
+@bot.command(name="menu")
+async def show_menu(ctx):
+    global last_channel
+    last_channel = ctx.channel
+    embed = discord.Embed(
+        title="📋 HỆ THỐNG QUẢN LÝ RDP",
+        description="Bấm nút bên dưới hoặc gõ lệnh:\n"
+                    "• `!getfile <path>` - Tải file từ máy về Discord\n"
+                    "• `!log` - Tải file log mặc định",
+        color=0x3498db
+    )
+    await ctx.send(embed=embed, view=RDPControlView())
+
+@bot.command(name="getfile")
+async def cmd_getfile(ctx, *, file_path: str):
+    global last_channel
+    last_channel = ctx.channel
+    clean_path = file_path.strip('"').strip("'")
+    await send_file_action(ctx, clean_path)
+
+@bot.command(name="log")
+async def cmd_log(ctx):
+    global last_channel
+    last_channel = ctx.channel
+    await send_file_action(ctx, "C:\\app_log.txt")
+
+@bot.command(name="status")
+async def cmd_status(ctx):
+    global last_channel
+    last_channel = ctx.channel
+    await show_status_action(ctx)
+
+@bot.command(aliases=["cap", "screenshot"])
+async def cmd_screenshot(ctx):
+    global last_channel
+    last_channel = ctx.channel
+    await capture_screen_action(ctx)
+
+@bot.command(name="specs")
+async def cmd_specs(ctx):
+    global last_channel
+    last_channel = ctx.channel
+    await show_specs_action(ctx)
+
+if __name__ == "__main__":
+    if TOKEN:
+        bot.run(TOKEN)
+'@
+          Set-Content -Path "C:\discord_bot.py" -Value $pythonCode -Encoding UTF8
+
+          Write-Host "Installing Python libraries..." -ForegroundColor Green
+          python -m pip install --upgrade pip --quiet
+          pip install discord.py mss Pillow psutil --quiet
+
+          # AN TOÀN HƠN: WATCHDOG KIỂM TRA CHÍNH XÁC SCRIPT DISCORD_BOT.PY
+          $watchdogCode = @'
+          while ($true) {
+              $process = Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -like "*discord_bot.py*" }
+              if (-not $process) {
+                  Write-Host "Bot Python process stopped. Restarting..."
+                  Start-Process python -ArgumentList "C:\discord_bot.py" -WindowStyle Hidden
+              }
+              Start-Sleep -Seconds 15
+          }
+'@
+          Set-Content -Path "C:\watchdog.ps1" -Value $watchdogCode -Encoding UTF8
+          Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File C:\watchdog.ps1" -WindowStyle Hidden
+
+      # === TREO SỐNG SESSION & TỰ ĐỘNG DỌN RAM MỖI 5 PHÚT ===
+      - name: Keep Session Alive & Auto RAM Cleaner
+        run: |
+          Write-Host "`n=== SESSION ACTIVE WITH AUTO RAM CLEANER (EVERY 5 MINS) ===" -ForegroundColor Green
+          $counter = 0
+          while ($true) {
+            $counter++
+            [System.GC]::Collect()
+            [System.GC]::WaitForPendingFinalizers()
+            
+            Write-Host "Session active & RAM Cleaned - Heartbeat #$counter ($(Get-Date))" -ForegroundColor Cyan
+            Start-Sleep -Seconds 300
+          }
