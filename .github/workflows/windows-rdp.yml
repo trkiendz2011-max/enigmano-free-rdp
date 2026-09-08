@@ -37,7 +37,7 @@ jobs:
           iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
           choco install googlechrome 7zip python3 -y --no-progress
           
-          # Cập nhật PATH cho Python ngay lập tức
+          # Cập nhật PATH cho Python
           $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 
       # === TỐI ƯU HỆ THỐNG & ÂM THANH ===
@@ -141,8 +141,8 @@ jobs:
             exit 1
           }
 
-      # === KHỞI TẠO VÀ CHẠY BOT DISCORD WITH WATCHDOG ===
-      - name: Setup & Run Interactive Discord Bot with Watchdog
+      # === KHỞI TẠO VÀ CHẠY BOT DISCORD NÂNG CẤP ===
+      - name: Setup & Run Interactive Discord Bot with Safe Watchdog
         shell: powershell
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
@@ -171,6 +171,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 start_time = time.time()
 last_channel = None
 
+# === HÀM XUẤT FILE / LOG ===
 async def send_file_action(target, file_path: str):
     if not os.path.exists(file_path):
         msg = f"❌ File không tồn tại: `{file_path}`"
@@ -191,6 +192,7 @@ async def send_file_action(target, file_path: str):
         err_msg = f"❌ Lỗi khi gửi file: `{str(e)}`"
         await (target.followup.send(err_msg) if isinstance(target, discord.Interaction) else target.send(err_msg))
 
+# === CHỤP MÀN HÌNH ===
 async def capture_screen_action(target):
     try:
         shot_path = "C:\\screenshot.png"
@@ -212,25 +214,36 @@ async def capture_screen_action(target):
         else:
             await target.send(msg)
 
+# === THÔNG SỐ CẤU HÌNH (QUAN SÁT TẤT CẢ Ổ ĐĨA C:, D:) ===
 async def show_specs_action(target):
     cpu_usage = psutil.cpu_percent(interval=1)
     ram = psutil.virtual_memory()
-    disk = psutil.disk_usage("C:\\")
+    
+    # Đọc dung lượng Ổ C:
+    disk_c = psutil.disk_usage("C:\\")
+    disk_c_free = round(disk_c.free / (1024**3), 2)
+    
+    # Đọc dung lượng Ổ D: (nếu có)
+    disk_d_str = "N/A"
+    if os.path.exists("D:\\"):
+        disk_d = psutil.disk_usage("D:\\")
+        disk_d_str = f"{round(disk_d.free / (1024**3), 2)} GB"
 
     ram_used_gb = round(ram.used / (1024**3), 2)
     ram_total_gb = round(ram.total / (1024**3), 2)
-    disk_free_gb = round(disk.free / (1024**3), 2)
 
     embed = discord.Embed(title="📊 TÌNH TRẠNG TÀI NGUYÊN MÁY ẢO", color=0xf1c40f)
     embed.add_field(name="⚡ CPU Usage", value=f"`{cpu_usage}%`", inline=True)
     embed.add_field(name="🧠 RAM Usage", value=f"`{ram_used_gb} GB / {ram_total_gb} GB ({ram.percent}%)`", inline=True)
-    embed.add_field(name="💾 Disk (C:) Free", value=f"`{disk_free_gb} GB`", inline=False)
+    embed.add_field(name="💾 Disk (C:) Free", value=f"`{disk_c_free} GB`", inline=True)
+    embed.add_field(name="💾 Disk (D:) Free", value=f"`{disk_d_str}`", inline=True)
 
     if isinstance(target, discord.Interaction):
         await target.followup.send(embed=embed)
     else:
         await target.send(embed=embed)
 
+# === TRẠNG THÁI RDP ===
 async def show_status_action(target):
     uptime_seconds = int(time.time() - start_time)
     hours, remainder = divmod(uptime_seconds, 3600)
@@ -242,13 +255,14 @@ async def show_status_action(target):
     embed.add_field(name="👤 Username", value="`runneradmin`", inline=True)
     embed.add_field(name="🔑 Password", value="`P@ssw0rd!`", inline=True)
     embed.add_field(name="⏱️ Uptime", value=f"`{uptime_str}`", inline=False)
-    embed.set_footer(text="Giới hạn tối đa 6 tiếng / Workflow run")
+    embed.set_footer(text="AMD EPYC 80-Core | Giới hạn 6 tiếng / Run")
 
     if isinstance(target, discord.Interaction):
         await target.followup.send(embed=embed)
     else:
         await target.send(embed=embed)
 
+# === GIAO DIỆN NÚT BẤM INTERACTIVE ===
 class RDPControlView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -268,6 +282,7 @@ class RDPControlView(View):
         await interaction.response.defer()
         await show_specs_action(interaction)
 
+# === TASK CẢNH BÁO TỰ ĐỘNG KHI CHẠY ĐƯỢC 5H45M ===
 @tasks.loop(seconds=1, count=1)
 async def timeout_warning_task():
     await asyncio.sleep(20700)
@@ -290,7 +305,7 @@ async def on_ready():
                 try:
                     embed = discord.Embed(
                         title="🚀 RDP ONLINE & SẴN SÀNG!",
-                        description=f"Máy ảo vừa khởi động thành công.\n• IP: `{TAILSCALE_IP}`\n• User: `runneradmin` | Pass: `P@ssw0rd!`",
+                        description=f"Máy ảo AMD EPYC vừa khởi động thành công.\n• Tailscale IP: `{TAILSCALE_IP}`\n• User: `runneradmin` | Pass: `P@ssw0rd!`",
                         color=0x2ecc71
                     )
                     await channel.send(embed=embed, view=RDPControlView())
@@ -309,7 +324,7 @@ async def show_menu(ctx):
     embed = discord.Embed(
         title="📋 HỆ THỐNG QUẢN LÝ RDP",
         description="Bấm nút bên dưới hoặc gõ lệnh:\n"
-                    "• `!getfile <path>` - Tải file về Discord\n"
+                    "• `!getfile <path>` - Tải file từ máy về Discord\n"
                     "• `!log` - Tải file log mặc định",
         color=0x3498db
     )
@@ -356,15 +371,15 @@ if __name__ == "__main__":
           python -m pip install --upgrade pip --quiet
           pip install discord.py mss Pillow psutil --quiet
 
-          # WATCHDOG AUTOMATION TO KEEP BOT ONLINE
+          # AN TOÀN HƠN: WATCHDOG KIỂM TRA CHÍNH XÁC SCRIPT DISCORD_BOT.PY
           $watchdogCode = @'
           while ($true) {
-              $process = Get-Process -Name "python" -ErrorAction SilentlyContinue
+              $process = Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -like "*discord_bot.py*" }
               if (-not $process) {
-                  Write-Host "Bot Python process not found. Restarting..."
+                  Write-Host "Bot Python process stopped. Restarting..."
                   Start-Process python -ArgumentList "C:\discord_bot.py" -WindowStyle Hidden
               }
-              Start-Sleep -Seconds 10
+              Start-Sleep -Seconds 15
           }
 '@
           Set-Content -Path "C:\watchdog.ps1" -Value $watchdogCode -Encoding UTF8
