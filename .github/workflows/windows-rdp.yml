@@ -18,41 +18,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 1. TỐI ƯU DUNG LƯỢNG Ổ CỨNG MAX
-      - name: Free Disk Space (Maximized)
+      - name: System Information
         run: |
-          Write-Host "Freeing up maximum disk space..." -ForegroundColor Green
-          $targets = @(
-            "C:\Program Files\dotnet",
-            "C:\Program Files\Android",
-            "C:\Program Files\Java",
-            "C:\hostedtoolcache\windows",
-            "C:\ProgramData\Chocolatey",
-            "C:\Julia",
-            "C:\Haskell"
-          )
-          foreach ($target in $targets) {
-            if (Test-Path $target) {
-              Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue
-            }
-          }
-          Clear-RecycleBin -Force -ErrorAction SilentlyContinue
-          Remove-Item -Path "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
-          
-          $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
-          $freeGB = [math]::Round($disk.FreeSpace / 1GB, 2)
-          Write-Host "Available Space on C: drive: $freeGB GB" -ForegroundColor Cyan
-
-      # 3. TỰ ĐỘNG CÀI SẴN PHẦN MỀM NỀN (Tùy chỉnh chọn phần mềm)
-      - name: Pre-install Essential Software
-        run: |
-          Write-Host "Installing Chocolatey & Apps..." -ForegroundColor Green
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-          
-          # Cài đặt sẵn Chrome & 7-Zip (Có thể thêm/bớt app tùy nhu cầu)
-          choco install googlechrome 7zip -y --no-progress
+          Write-Host "=== ENIGMANO RDP DEPLOYMENT ===" -ForegroundColor Green
+          Write-Host "Instance Number: ${{ github.event.inputs.instance_number }}" -ForegroundColor Yellow
+          Write-Host "Runner: $env:RUNNER_NAME" -ForegroundColor Yellow
+          Write-Host "Workflow: $env:GITHUB_WORKFLOW" -ForegroundColor Yellow
+          Write-Host "`n=== SYSTEM SPECIFICATIONS ===" -ForegroundColor Cyan
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, TotalPhysicalMemory
+          Get-WmiObject -Class Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
 
       - name: Optimize System Performance
         run: |
@@ -61,6 +35,14 @@ jobs:
           Set-Service -Name "wuauserv", "sysmain", "WSearch" -StartupType Disabled -ErrorAction SilentlyContinue
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 2
+
+      - name: Pre-install Essential Software
+        run: |
+          Write-Host "Installing Chocolatey & Apps..." -ForegroundColor Green
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          choco install googlechrome 7zip -y --no-progress
 
       - name: Enable RDP
         run: |
