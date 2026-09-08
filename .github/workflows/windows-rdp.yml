@@ -1,4 +1,4 @@
-name: EnigMano Instance Deployment
+name: EnigMano RDP via Tailscale
 
 on:
   workflow_dispatch:
@@ -44,88 +44,50 @@ jobs:
           Write-Host "Username: runneradmin" -ForegroundColor Yellow
           Write-Host "Password: P@ssw0rd!" -ForegroundColor Yellow
 
-      - name: Download and Setup ngrok
+      - name: Install Tailscale
         run: |
-          Write-Host "Downloading ngrok..." -ForegroundColor Green
-          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
-          Expand-Archive ngrok.zip -DestinationPath C:\ngrok
-          Write-Host "ngrok downloaded successfully!" -ForegroundColor Green
+          Write-Host "Installing Tailscale..." -ForegroundColor Green
+          # Download Tailscale installer
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale-setup.exe"
+          # Install silently
+          Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
+          Write-Host "Tailscale installed successfully!" -ForegroundColor Green
 
-      - name: Configure ngrok
+      - name: Authenticate Tailscale
         run: |
-          Write-Host "Configuring ngrok..." -ForegroundColor Green
-          C:\ngrok\ngrok.exe config add-authtoken ${{ secrets.NGROK_SHAHZAIB }}
-          Write-Host "ngrok configured successfully!" -ForegroundColor Green
+          Write-Host "Authenticating Tailscale..." -ForegroundColor Green
+          $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
+          if ([string]::IsNullOrEmpty($authKey)) {
+            Write-Host "ERROR: TAILSCALE_AUTH_KEY secret is not set!" -ForegroundColor Red
+            exit 1
+          }
+          # Start Tailscale and authenticate
+          Start-Process -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up --auth-key $authKey --accept-routes" -Wait
+          Write-Host "Tailscale authenticated successfully!" -ForegroundColor Green
 
-      - name: Install Essential Software
+      - name: Get Tailscale IP
         run: |
-          Write-Host "Installing essential software..." -ForegroundColor Green
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-          choco install googlechrome 7zip notepadplusplus -y
-          Write-Host "Software installation completed!" -ForegroundColor Green
-
-      - name: Start ngrok Tunnel
-        run: |
-          Write-Host "Starting ngrok tunnel..." -ForegroundColor Green
-          # Start ngrok in background and capture output
-          $ngrokProcess = Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -PassThru -WindowStyle Hidden -RedirectStandardOutput "ngrok_output.txt"
-          Start-Sleep -Seconds 15
+          Write-Host "Getting Tailscale IP..." -ForegroundColor Green
+          Start-Sleep -Seconds 10
+          $tailscaleIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          $tailscaleIP = $tailscaleIP.Trim()
           
-          # Check if ngrok is running
-          if (Get-Process -Name "ngrok" -ErrorAction SilentlyContinue) {
-            Write-Host "ngrok process is running!" -ForegroundColor Green
-          } else {
-            Write-Host "ngrok process failed to start!" -ForegroundColor Red
-          }
-
-      - name: Get Connection Details
-        run: |
           Write-Host "`n=== CONNECTION DETAILS ===" -ForegroundColor Green
-          Start-Sleep -Seconds 5
-          try {
-            # Try multiple times to get ngrok details
-            $retries = 0
-            $maxRetries = 10
-            $ngrokApi = $null
-            
-            while ($retries -lt $maxRetries) {
-              try {
-                $ngrokApi = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5
-                if ($ngrokApi.tunnels.Count -gt 0) {
-                  break
-                }
-              } catch {
-                Write-Host "Waiting for ngrok tunnel... (attempt $($retries+1)/$maxRetries)" -ForegroundColor Yellow
-                Start-Sleep -Seconds 3
-                $retries++
-              }
-            }
-            
-            if ($ngrokApi -ne $null -and $ngrokApi.tunnels.Count -gt 0) {
-              $publicUrl = $ngrokApi.tunnels[0].public_url
-              $host = $publicUrl -replace "tcp://", ""
-              
-              Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
-              Write-Host "║         ENIGMANO RDP ACCESS          ║" -ForegroundColor Cyan
-              Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Cyan
-              Write-Host "║ Host: $host" -ForegroundColor White
-              Write-Host "║ Username: runneradmin                ║" -ForegroundColor White
-              Write-Host "║ Password: P@ssw0rd!                  ║" -ForegroundColor White
-              Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Cyan
-              
-              Write-Host "`nConnection Instructions:" -ForegroundColor Yellow
-              Write-Host "1. Open Remote Desktop Connection" -ForegroundColor White
-              Write-Host "2. Enter the host address above" -ForegroundColor White
-              Write-Host "3. Use the provided credentials" -ForegroundColor White
-              Write-Host "4. IMPORTANT: Minimize (don't close) this window to keep connection alive!" -ForegroundColor Red
-            } else {
-              Write-Host "ngrok tunnel not available after retries!" -ForegroundColor Red
-            }
-          } catch {
-            Write-Host "Error getting ngrok details: $_" -ForegroundColor Red
-          }
+          Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
+          Write-Host "║         TAILSCALE RDP ACCESS          ║" -ForegroundColor Cyan
+          Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Cyan
+          Write-Host "║ IP: $tailscaleIP" -ForegroundColor White
+          Write-Host "║ Username: runneradmin                ║" -ForegroundColor White
+          Write-Host "║ Password: P@ssw0rd!                  ║" -ForegroundColor White
+          Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Cyan
+          
+          Write-Host "`nConnection Instructions:" -ForegroundColor Yellow
+          Write-Host "1. Install Tailscale on your device" -ForegroundColor White
+          Write-Host "2. Login with the same Tailscale account" -ForegroundColor White
+          Write-Host "3. Open Remote Desktop Connection" -ForegroundColor White
+          Write-Host "4. Enter the Tailscale IP address above" -ForegroundColor White
+          Write-Host "5. Username: runneradmin | Password: P@ssw0rd!" -ForegroundColor White
+          Write-Host "6. IMPORTANT: Minimize (don't close) this window to keep connection alive!" -ForegroundColor Red
 
       - name: Keep Session Alive
         run: |
