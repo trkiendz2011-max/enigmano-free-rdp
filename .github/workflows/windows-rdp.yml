@@ -49,11 +49,13 @@ jobs:
           Write-Host "Downloading ngrok..." -ForegroundColor Green
           Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
           Expand-Archive ngrok.zip -DestinationPath C:\ngrok
+          Write-Host "ngrok downloaded successfully!" -ForegroundColor Green
 
       - name: Configure ngrok
         run: |
           Write-Host "Configuring ngrok..." -ForegroundColor Green
           C:\ngrok\ngrok.exe config add-authtoken ${{ secrets.NGROK_SHAHZAIB }}
+          Write-Host "ngrok configured successfully!" -ForegroundColor Green
 
       - name: Install Essential Software
         run: |
@@ -64,62 +66,65 @@ jobs:
           choco install googlechrome 7zip notepadplusplus -y
           Write-Host "Software installation completed!" -ForegroundColor Green
 
-      - name: Configure Chrome Extensions
-        run: |
-          Write-Host "Configuring Chrome with security extensions..." -ForegroundColor Green
-          $ChromePrefs = '{"extensions":{"settings":{"cjpalhdlnbpafiamejdnhcphjbkeiagm":{"state":1,"was_installed_by_default":false,"was_installed_by_oem":false,"was_installed_by_custodian":false,"creation_flags":1,"location":1,"manifest":{"name":"uBlock Origin","version":"1.0"}}}}}'
-          $ChromeDir = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default"
-          if (!(Test-Path $ChromeDir)) {
-            New-Item -ItemType Directory -Path $ChromeDir -Force
-          }
-          $ChromePrefs | Out-File -FilePath "$ChromeDir\Preferences" -Encoding UTF8
-
-      - name: Setup Cloudflare WARP
-        run: |
-          Write-Host "Setting up Cloudflare WARP..." -ForegroundColor Green
-          try {
-            Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "CloudflareWARP.msi"
-            Start-Process msiexec.exe -Wait -ArgumentList '/I CloudflareWARP.msi /quiet'
-            Write-Host "Cloudflare WARP installed successfully!" -ForegroundColor Green
-          } catch {
-            Write-Host "Cloudflare WARP installation failed, continuing..." -ForegroundColor Yellow
-          }
-
       - name: Start ngrok Tunnel
         run: |
           Write-Host "Starting ngrok tunnel..." -ForegroundColor Green
-          Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -WindowStyle Hidden
-          Start-Sleep -Seconds 10
+          # Start ngrok in background and capture output
+          $ngrokProcess = Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -PassThru -WindowStyle Hidden -RedirectStandardOutput "ngrok_output.txt"
+          Start-Sleep -Seconds 15
+          
+          # Check if ngrok is running
+          if (Get-Process -Name "ngrok" -ErrorAction SilentlyContinue) {
+            Write-Host "ngrok process is running!" -ForegroundColor Green
+          } else {
+            Write-Host "ngrok process failed to start!" -ForegroundColor Red
+          }
 
       - name: Get Connection Details
         run: |
           Write-Host "`n=== CONNECTION DETAILS ===" -ForegroundColor Green
+          Start-Sleep -Seconds 5
           try {
-            $ngrokApi = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels"
-            $publicUrl = $ngrokApi.tunnels[0].public_url
-            $host = $publicUrl -replace "tcp://", ""
-            Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
-            Write-Host "║         ENIGMANO RDP ACCESS          ║" -ForegroundColor Cyan
-            Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Cyan
-            Write-Host "║ Host: $host" -ForegroundColor White
-            Write-Host "║ Username: runneradmin                ║" -ForegroundColor White
-            Write-Host "║ Password: P@ssw0rd!                  ║" -ForegroundColor White
-            Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Cyan
-            Write-Host "`nConnection Instructions:" -ForegroundColor Yellow
-            Write-Host "1. Open Remote Desktop Connection" -ForegroundColor White
-            Write-Host "2. Enter the host address above" -ForegroundColor White
-            Write-Host "3. Use the provided credentials" -ForegroundColor White
-            Write-Host "4. IMPORTANT: Minimize (don't close) this window to keep connection alive!" -ForegroundColor Red
-          } catch {
-            Write-Host "Error getting ngrok details. Checking manually..." -ForegroundColor Red
-            Start-Sleep -Seconds 5
-            try {
-              $ngrokApi = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels"
-              $publicUrl = $ngrokApi.tunnels[0].public_url
-              Write-Host "Manual check - ngrok URL: $publicUrl" -ForegroundColor Green
-            } catch {
-              Write-Host "ngrok API not accessible. Please check ngrok status manually." -ForegroundColor Red
+            # Try multiple times to get ngrok details
+            $retries = 0
+            $maxRetries = 10
+            $ngrokApi = $null
+            
+            while ($retries -lt $maxRetries) {
+              try {
+                $ngrokApi = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5
+                if ($ngrokApi.tunnels.Count -gt 0) {
+                  break
+                }
+              } catch {
+                Write-Host "Waiting for ngrok tunnel... (attempt $($retries+1)/$maxRetries)" -ForegroundColor Yellow
+                Start-Sleep -Seconds 3
+                $retries++
+              }
             }
+            
+            if ($ngrokApi -ne $null -and $ngrokApi.tunnels.Count -gt 0) {
+              $publicUrl = $ngrokApi.tunnels[0].public_url
+              $host = $publicUrl -replace "tcp://", ""
+              
+              Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
+              Write-Host "║         ENIGMANO RDP ACCESS          ║" -ForegroundColor Cyan
+              Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Cyan
+              Write-Host "║ Host: $host" -ForegroundColor White
+              Write-Host "║ Username: runneradmin                ║" -ForegroundColor White
+              Write-Host "║ Password: P@ssw0rd!                  ║" -ForegroundColor White
+              Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Cyan
+              
+              Write-Host "`nConnection Instructions:" -ForegroundColor Yellow
+              Write-Host "1. Open Remote Desktop Connection" -ForegroundColor White
+              Write-Host "2. Enter the host address above" -ForegroundColor White
+              Write-Host "3. Use the provided credentials" -ForegroundColor White
+              Write-Host "4. IMPORTANT: Minimize (don't close) this window to keep connection alive!" -ForegroundColor Red
+            } else {
+              Write-Host "ngrok tunnel not available after retries!" -ForegroundColor Red
+            }
+          } catch {
+            Write-Host "Error getting ngrok details: $_" -ForegroundColor Red
           }
 
       - name: Keep Session Alive
@@ -132,16 +137,5 @@ jobs:
           while ($true) {
             $counter++
             Write-Host "Session active - Heartbeat #$counter ($(Get-Date))" -ForegroundColor Green
-            try {
-              $ngrokStatus = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5
-              if ($ngrokStatus.tunnels.Count -gt 0) {
-                Write-Host "ngrok tunnel status: ACTIVE" -ForegroundColor Green
-              } else {
-                Write-Host "ngrok tunnel status: NO TUNNELS" -ForegroundColor Yellow
-              }
-            } catch {
-              Write-Host "ngrok tunnel status: ERROR - Restarting..." -ForegroundColor Red
-              Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -WindowStyle Hidden
-            }
             Start-Sleep -Seconds 60
           }
