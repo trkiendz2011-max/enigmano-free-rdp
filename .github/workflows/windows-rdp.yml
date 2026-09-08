@@ -1,4 +1,4 @@
-name: Windows RDP Tailscale & Discord Bot
+name: Windows RDP Ultra-Optimized (No Discord)
 
 on:
   workflow_dispatch:
@@ -9,49 +9,52 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Python Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install discord.py mss pillow psutil requests
-
-      - name: Enable Remote Desktop (RDP) & Disable NLA
+      - name: Optimize System Performance & Enable RDP
         shell: powershell
         run: |
-          # 1. Bật RDP và tắt NLA để kết nối mượt từ mọi thiết bị
+          Write-Host "--- 1. Dynamic CPU & RAM Optimization ---"
+          # Chuyển Power Plan sang High Performance
+          powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          
+          # Tắt dịch vụ ngầm ngốn CPU & RAM (SysMain, Windows Search, Update, Telemetry)
+          $services = @("SysMain", "WSearch", "wuauserv", "DiagTrack", "MapsBroker", "dosvc")
+          foreach ($s in $services) {
+              Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
+              Set-Service -Name $s -StartupType Disabled -ErrorAction SilentlyContinue
+          }
+
+          # Tắt Windows Defender Real-time Protection để giảm 15-20% CPU
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+
+          # Tắt hiệu ứng hình ảnh Windows (Visual Effects) để RDP cực mượt
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "UserPreferencesMask" -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -ErrorAction SilentlyContinue
+
+          Write-Host "--- 2. Enable & Optimize RDP ---"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
           Set-Service -Name "TermService" -StartupType Automatic -ErrorAction SilentlyContinue
           Start-Service -Name "TermService" -ErrorAction SilentlyContinue
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
 
-          # 2. Cài mật khẩu người dùng
+          Write-Host "--- 3. Configure Account Password ---"
           $pass = $env:RDP_PASS
           if ([string]::IsNullOrWhiteSpace($pass)) {
               $pass = "Admin@2026RDP!"
           }
           net user runneradmin $pass
           net localgroup Administrators runneradmin /add -ErrorAction SilentlyContinue
-          Write-Host "Configured RDP user: runneradmin"
+          
+          Write-Host "RDP User: runneradmin | Password: $pass"
         env:
           RDP_PASS: ${{ secrets.RDP_PASSWORD }}
 
       - name: Install & Connect Tailscale
         shell: powershell
         run: |
-          Write-Host "Downloading Tailscale..."
+          Write-Host "Installing Tailscale..."
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
           $installer = "$env:TEMP\tailscale-setup.exe"
           Invoke-WebRequest -Uri $tsUrl -OutFile $installer -UseBasicParsing
-
-          Write-Host "Installing Tailscale..."
           Start-Process -FilePath $installer -ArgumentList "/S" -Wait
 
           $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
@@ -62,14 +65,12 @@ jobs:
           $authKey = $env:TS_AUTH_KEY
           if (Test-Path $tsPath) {
               if (-not [string]::IsNullOrWhiteSpace($authKey)) {
-                  Write-Host "Connecting to Tailscale..."
                   & $tsPath up --authkey=$authKey --unattended --accept-routes
               } else {
-                  Write-Warning "TAILSCALE_AUTH_KEY is not set in Secrets!"
+                  Write-Warning "TAILSCALE_AUTH_KEY chưa được cài trong Secrets!"
               }
               
-              # Vòng lặp chờ IP an toàn (Tránh lỗi Null Reference)
-              $tsIp = ""
+              $tsIp = "Chua_Ket_Noi"
               for ($i = 0; $i -lt 15; $i++) {
                   Start-Sleep -Seconds 2
                   $rawIp = & $tsPath ip -4 2>$null
@@ -80,45 +81,15 @@ jobs:
               }
 
               Write-Host "=========================================="
-              Write-Host "TAILSCALE IP: $tsIp"
+              Write-Host "TAILSCALE IP : $tsIp"
               Write-Host "=========================================="
-              "TAILSCALE_IP=$tsIp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          } else {
-              Write-Error "Tailscale installation failed."
           }
         env:
           TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
-      - name: Write bot.py via Native PowerShell
+      - name: Keep Alive (6 Hours)
         shell: powershell
         run: |
-          $b64 = "aW1wb3J0IG9zCmltcG9ydCBpbwppbXBvcnQgc3VicHJvY2VzcwppbXBvcnQgcHN1dGlsCmltcG9ydCBkaXNjb3JkCmZyb20gZGlzY29yZC5leHQgaW1wb3J0IGNvbW1hbmRzCmZyb20gUElMIGltcG9ydCBJbWFnZUdyYWIKaW1wb3J0IG1zcwppbnRlbnRzID0gZGlzY29yZC5JbnRlbnRzLmRlZmF1bHQoKQppbnRlbnRzLm1lc3NhZ2VfY29udGVudCA9IFRydWUKYm90ID0gY29tbWFuZHMuQm90KGNvbW1hbmRfcHJlZml4PVsiISIsICIvIl0sIGludGVudHM9aW50ZW50cykKQGJvdC5ldmVudAphc3luYyBkZWYgb25fcmVhZHkoKToKICAgIHByaW50KGYiQm90IGxvZ2dlZCBpbiBhcyB7Ym90LnVzZXJ9IikKICAgIGlwID0gb3MuZ2V0ZW52KCJUQUlMU0NBTEVfSVAiLCAiTi9BIikKICAgIHVzZXIgPSBvcy5nZXRlbnYoIlJEUF9VU0VSIiwgInJ1bm5lcmFkbWluIikKICAgIHB3ZCA9IG9zLmdldGVudigiUkRQX1BBU1MiLCAiQWRtaW5AMjAyNlJEUCEiKQogICAgbXNnID0gKAogICAgICAgIGYi8J2YgComKldpbmRvd3MgUkRQIExpdmUgJiBDb25uZWN0ZWQhKipcblxuIgogICAgICAgIGYi8J2ThCComVGFpbHNjYWxlIElQOioqIHBge2lwfWBcbiIKICAgICAgICBmIvCfkLQgKm1Vc2VybmFtZToqKiBgI3t1c2VyfWBcbiIKICAgICAgICBmIvCUnRAgKm1QYXNzd29yZDoqKiBgI3twd2R9YFxuXG4iCiAgICAgICAgZiLwn5KhICptQ29tbWFuZHM6KipcbiIKICAgICAgICBmImAhaXBgIC0gU2hvdyBjb25uZWN0aW9uIGluZm9cbiIKICAgICAgICBmImAhY2FwYCAtIFRha2UgZGVza3RvcCBzY3JlZW5zaG90XG4iCiAgICAgICAgZiJgIWNtZCA8Y29tbWFuZD5gIC0gUnVuIFBvd2VyU2hlbGwgY29tbWFuZFxuIgogICAgICAgIGYiISFzeXNgIC0gVmlldyBzeXN0ZW0gc3RhdHVzIgogICAgKQogICAgZm9yIGd1aWxkIGluIGJvdC5ndWlsZHM6CiAgICAgICAgZm9yIGNoYW5uZWwgaW4gZ3VpbGQudGV4dF9jaGFubmVsczoKICAgICAgICAgICAgaWYgY2hhbm5lbC5wZXJtaXNzaW9uc19mb3IoZ3VpbGQubWUpLnNlbmRfbWVzc2FnZXM6CiAgICAgICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICAgICAgYXdhaXQgY2hhbm5lbC5zZW5kKG1zZykKICAgICAgICAgICAgICAgICAgICBicmVhawogICAgICAgICAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgICAgICAgICAgICAgIHByaW50KGYiRXJyb3I6I3tlfSIpCkBib3QuY29tbWFuZChuYW1lPSJpcCIpCmFzeW5jIGRlZiBjbWRfaXAoY3R4KToKICAgIGlwID0gb3MuZ2V0ZW52KCJUQUlMU0NBTEVfSVAiLCAiTi9BIikKICAgIHVzZXIgPSBvcy5nZXRlbnYoIlJEUF9VU0VSIiwgInJ1bm5lcmFkbWluIikKICAgIHB3ZCA9IG9zLmdldGVudigiUkRQX1BBU1MiLCAiQWRtaW5AMjAyNlJEUCEiKQogICAgYXdhaXQgY3R4LnNlbmQoZiLwn4S1ICptUkRQIEluZm86KipcbklQOiBgI3tpc31gXG5Vc2VyOiBgI3t1c2VyfWBcblBhc3M6IGAje3B3ZH1gIikKQGJvdC5jb21tYW5kKG5hbWU9ImNhcCIpCmFzeW5jIGRlZiBjbWRfY2FwKGN0eCk6CiAgICB0cnk6CiAgICAgICAgaW1nID0gSW1hZ2VHcmFiLmdyYWIoKQogICAgICAgIGJ1ZiA9IGlvLkJ5dGVzSU8oKQogICAgICAgIGltZy5zYXZlKGJ1ZiwgZm9ybWF0PSJQTkciKQogICAgICAgIGJ1Zi5zZWVrKDApCiAgICAgICAgYXdhaXQgY3R4LnNlbmQoZmlsZT1kaXNjb3JkLkZpbGUoZnA9YnVmLCBmaWxlbmFtZT0ic2NyZWVuc2hvdC5wbmciKSkKICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZTE6CiAgICAgICarg3RyeToKICAgICAgICAgICAgd2l0aCBtc3MubXNzKCkgYXMgc2N0OgogICAgICAgICAgICAgICAgc2N0LnNob3Qob3V0cHV0PSJzY3JlZW5zaG90LnBuZyIpCiAgICAgICAgICAgICAgICBhd2FpdCBjdHguc2VuZChmaWxlPWRpc2NvcmQuRmlsZSgic2NyZWVuc2hvdC5wbmciKSkKICAgICAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGUyOgogICAgICAgICAgICBhd2FpdCBjdHguc2VuZChmIuCdg2IgRXJyb3IgdGFraW5nIHNjcmVlbnNob3Q6ICN7ZTF9IHwgI3tlMn0iKQpAYm90LmNvbW1hbmQobmFtZT0iY21kIikKYXN5bmMgZGVmIGNtZF9ydW4oY3R4LCAqLCBjb21tYW5kOiBzdHIpOgogICAgdHJ5OgogICAgICAgIHJlcyA9IHN1YnByb2Nlc3MucnVuKCgicG93ZXJzaGVsbCIsICItQ29tbWFuZCIsIGNvbW1hbmQpLCBjYXB0dXJlX291dHB1dD1UcnVlLCB0ZXh0PVRydWUsIHRpbWVvdXQ9NjApCiAgICAgICAgb3V0cHV0ID0gcmVzLnN0ZG91dCBpZiByZXMuc3RtdW11dCBlbHNlIHJlcy5zdGRlcnIKICAgICAgICBpZiBub3Qgb3V0cHV0OgogICAgICAgICAgICBvdXRwdXQgPSAiKE5vIG91dHB1dCkiCiAgICAgICAgaWYgbGVuKG91dHB1dCkgPiAxOTAwOgogICAgICAgICAgICBvdXRwdXQgPSBvdXRwdXRbOjE5MDBdICsgIlxuLi4uICh0cnVuY2F0ZWQpIgogICAgICAgIGF3YWl0IGN0eC5zZW5kKGYiYGBgcG93ZXJzaGVsbFxuI3tvdXRwdXR9XG5gYGBpKQogICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgIGF3YWl0IGN0eC5zZW5kKGYi8J2TpIEVycm9yOiAje2V9IikKQGJvdC5jb21tYW5kKG5hbWU9InN5cyIpCmFzeW5jIGRlZiBjbWRfc3lzKGN0eCk6CiAgICBjcHUgPSBwc3V0aWwuY3B1X3BlcmNlbnQoaW50ZXJ2YWw9MSkKICAgIHJhbSA9IHBzdXRpbC52aXJ0dWFsX21lbW9yeSgpLnBlcmNlbnQKICAgIGRpc2sgPSBwc3V0aWwuZGlza191c2FnZSgiQzpcXCIpLnBlcmNlbnQKICAgIGF3YWl0IGN0eC5zZW5kKGYi8J2SiiAqKlN5c3RlbSBTdGF0dXM6KipcbkNQVSAgI3tjcHV9JSB8IFJBTTogI3tyYW19JSB8IERpc2sgQzogI3tkaXNrfSUiKQp0b2tlbiA9IG9zLmdldGVudigiRElTQ09SRF9CT1RfVE9LRU4iKQppZiB0b2tlbjoKICAgIHRyeToKICAgICAgICBib3QucnVuKHRva2VuKQogICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgIHByaW50KGYiRXJyb3Igc3RhcnRpbmcgYm90OiAje2V9IikKZWxzZToKICAgIHByaW50KCJESVNDT1JEX0JPVF9UT0tFTiBub3QgcHJvdmlkZWQuIik="
-          $bytes = [System.Convert]::FromBase64String($b64)
-          [System.IO.File]::WriteAllBytes("C:\bot.py", $bytes)
-          Write-Host "C:\bot.py generated successfully via native PowerShell."
-
-      - name: Run Discord Bot & Keep RDP Alive
-        shell: powershell
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          TAILSCALE_IP: ${{ env.TAILSCALE_IP }}
-          RDP_USER: "runneradmin"
-          RDP_PASS: ${{ secrets.RDP_PASSWORD }}
-        run: |
-          if ($env:DISCORD_BOT_TOKEN) {
-              Write-Host "Starting Discord Bot in background..."
-              Start-Process -FilePath "python" -ArgumentList "C:\bot.py" -NoNewWindow
-          } else {
-              Write-Warning "DISCORD_BOT_TOKEN missing. Skipping bot start."
-          }
-
-          Write-Host "=========================================="
-          Write-Host "RDP SERVER IS ACTIVE!"
-          Write-Host "Tailscale IP : $env:TAILSCALE_IP"
-          Write-Host "Username     : runneradmin"
-          Write-Host "=========================================="
-
-          # Giữ Workflow sống trong 6 tiếng
           for ($i = 0; $i -lt 360; $i++) {
               Start-Sleep -Seconds 60
           }
