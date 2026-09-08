@@ -1,95 +1,168 @@
-name: Windows RDP Ultra-Optimized (No Discord)
+name: EnigMano RDP via Tailscale
 
 on:
   workflow_dispatch:
+    inputs:
+      instance_number:
+        description: 'Instance Number (1-10)'
+        required: true
+        default: '1'
+        type: string
 
 jobs:
-  build:
+  deploy-rdp:
     runs-on: windows-2022
     timeout-minutes: 360
 
     steps:
-      - name: Optimize System Performance & Enable RDP
-        shell: powershell
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: System Information
         run: |
-          Write-Host "--- 1. Dynamic CPU & RAM Optimization ---"
-          # Chuyển Power Plan sang High Performance
-          powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          Write-Host "=== ENIGMANO RDP DEPLOYMENT ===" -ForegroundColor Green
+          Write-Host "Instance Number: ${{ github.event.inputs.instance_number }}" -ForegroundColor Yellow
+          Write-Host "Runner: $env:RUNNER_NAME" -ForegroundColor Yellow
+          Write-Host "Workflow: $env:GITHUB_WORKFLOW" -ForegroundColor Yellow
+          Write-Host "`n=== SYSTEM SPECIFICATIONS ===" -ForegroundColor Cyan
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, TotalPhysicalMemory
+          Get-WmiObject -Class Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+
+      # === CÀI ĐẶT PHẦN MỀM CƠ BẢN TRƯỚC ===
+      - name: Pre-install Essential Software
+        run: |
+          Write-Host "Installing Chocolatey & Apps..." -ForegroundColor Green
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          choco install googlechrome 7zip -y --no-progress
+
+      # === TỐI ƯU HỆ THỐNG & ÂM THANH ===
+      - name: Optimize System Performance & Audio
+        run: |
+          Write-Host "Optimizing System Performance..." -ForegroundColor Green
           
-          # Tắt dịch vụ ngầm ngốn CPU & RAM (SysMain, Windows Search, Update, Telemetry)
-          $services = @("SysMain", "WSearch", "wuauserv", "DiagTrack", "MapsBroker", "dosvc")
-          foreach ($s in $services) {
-              Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
-              Set-Service -Name $s -StartupType Disabled -ErrorAction SilentlyContinue
+          # Tắt dịch vụ ngầm gây tốn tài nguyên
+          Stop-Service -Name "wuauserv", "sysmain", "WSearch" -ErrorAction SilentlyContinue
+          "wuauserv", "sysmain", "WSearch" | ForEach-Object { Set-Service -Name $_ -StartupType Disabled -ErrorAction SilentlyContinue }
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 2
+
+          # Bật Âm thanh RDP
+          Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name "AudioEndpointBuilder" -ErrorAction SilentlyContinue
+          Set-Service -Name "Audiosrv" -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name "Audiosrv" -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "fDisableAudio" -Value 0
+
+      # === TỐI ƯU MẠNG & GIẢM LAG RDP ===
+      - name: Optimize Network & RDP Smoothness
+        run: |
+          Write-Host "Optimizing Network TCP/IP & RDP Performance..." -ForegroundColor Green
+          
+          # Tắt Network Throttling
+          $netKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
+          Set-ItemProperty -Path $netKey -Name "NetworkThrottlingIndex" -Value 0xffffffff
+          Set-ItemProperty -Path $netKey -Name "SystemResponsiveness" -Value 0
+
+          # Bật cấu hình truyền tải hình ảnh RDP
+          $tsPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+          if (!(Test-Path $tsPolicy)) { New-Item -Path $tsPolicy -Force }
+          Set-ItemProperty -Path $tsPolicy -Name "fEnableWiggling" -Value 0
+          Set-ItemProperty -Path $tsPolicy -Name "bEnablerdpsguid" -Value 1
+
+      # === GIẢ LẬP GPU VẢO VỚI MESA3D ===
+      - name: Install Mesa3D Software GPU
+        run: |
+          Write-Host "Setting up Mesa3D Software OpenGL/DirectX GPU..." -ForegroundColor Green
+          $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/download/23.1.5/mesa3d-23.1.5-release-msvc.7z"
+          $outputZip = "$env:TEMP\mesa3d.7z"
+          $extractPath = "C:\Mesa3D"
+          
+          Invoke-WebRequest -Uri $mesaUrl -OutFile $outputZip -ErrorAction SilentlyContinue
+          if (Test-Path $outputZip) {
+            & "C:\Program Files\7-Zip\7z.exe" x $outputZip -o"$extractPath" -y | Out-Null
+            Write-Host "Mesa3D installed successfully at $extractPath!" -ForegroundColor Green
+          } else {
+            Write-Host "Skipping Mesa3D download, proceed with standard deployment." -ForegroundColor Yellow
           }
 
-          # Tắt Windows Defender Real-time Protection để giảm 15-20% CPU
-          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-
-          # Tắt hiệu ứng hình ảnh Windows (Visual Effects) để RDP cực mượt
-          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "UserPreferencesMask" -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -ErrorAction SilentlyContinue
-
-          Write-Host "--- 2. Enable & Optimize RDP ---"
+      - name: Enable RDP
+        run: |
+          Write-Host "Enabling Remote Desktop..." -ForegroundColor Green
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-          Set-Service -Name "TermService" -StartupType Automatic -ErrorAction SilentlyContinue
-          Start-Service -Name "TermService" -ErrorAction SilentlyContinue
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-          Write-Host "--- 3. Configure Account Password ---"
-          $pass = $env:RDP_PASS
-          if ([string]::IsNullOrWhiteSpace($pass)) {
-              $pass = "Admin@2026RDP!"
-          }
-          net user runneradmin $pass
-          net localgroup Administrators runneradmin /add -ErrorAction SilentlyContinue
-          
-          Write-Host "RDP User: runneradmin | Password: $pass"
-        env:
-          RDP_PASS: ${{ secrets.RDP_PASSWORD }}
-
-      - name: Install & Connect Tailscale
-        shell: powershell
+      - name: Create User Account
         run: |
-          Write-Host "Installing Tailscale..."
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
-          $installer = "$env:TEMP\tailscale-setup.exe"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installer -UseBasicParsing
-          Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+          Write-Host "Setting up user account..." -ForegroundColor Green
+          $Password = ConvertTo-SecureString "P@ssw0rd!" -AsPlainText -Force
+          Set-LocalUser -Name "runneradmin" -Password $Password
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin"
 
-          $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
-          if (-not (Test-Path $tsPath)) {
-              $tsPath = "C:\Program Files (x86)\Tailscale\tailscale.exe"
-          }
-
-          $authKey = $env:TS_AUTH_KEY
-          if (Test-Path $tsPath) {
-              if (-not [string]::IsNullOrWhiteSpace($authKey)) {
-                  & $tsPath up --authkey=$authKey --unattended --accept-routes
-              } else {
-                  Write-Warning "TAILSCALE_AUTH_KEY chưa được cài trong Secrets!"
-              }
-              
-              $tsIp = "Chua_Ket_Noi"
-              for ($i = 0; $i -lt 15; $i++) {
-                  Start-Sleep -Seconds 2
-                  $rawIp = & $tsPath ip -4 2>$null
-                  if ($rawIp) {
-                      $tsIp = $rawIp.Trim()
-                      break
-                  }
-              }
-
-              Write-Host "=========================================="
-              Write-Host "TAILSCALE IP : $tsIp"
-              Write-Host "=========================================="
-          }
-        env:
-          TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-
-      - name: Keep Alive (6 Hours)
-        shell: powershell
+      - name: Install Tailscale
         run: |
-          for ($i = 0; $i -lt 360; $i++) {
-              Start-Sleep -Seconds 60
+          Write-Host "Installing Tailscale..." -ForegroundColor Green
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale-setup.exe"
+          Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
+
+      - name: Authenticate Tailscale
+        id: tailscale_auth
+        run: |
+          Write-Host "Authenticating Tailscale..." -ForegroundColor Green
+          $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
+          if ([string]::IsNullOrEmpty($authKey)) {
+            Write-Host "::error::TAILSCALE_AUTH_KEY secret is not set!"
+            exit 1
+          }
+          Start-Process -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up --auth-key $authKey --accept-routes" -Wait
+
+      - name: Get Tailscale IP with Retry
+        id: get_ip
+        run: |
+          Write-Host "Waiting for Tailscale IP..." -ForegroundColor Green
+          $tailscaleIP = $null
+          $retries = 0
+          $maxRetries = 30
+          while ($retries -lt $maxRetries) {
+            $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($ip) {
+              $tailscaleIP = $ip.Trim()
+              break
+            }
+            Start-Sleep -Seconds 3
+            $retries++
+          }
+          if ($tailscaleIP) {
+            Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$tailscaleIP"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "ip=$tailscaleIP"
+          } else {
+            exit 1
+          }
+
+      - name: Show Connection Details
+        if: success()
+        run: |
+          $tailscaleIP = "${{ steps.get_ip.outputs.ip }}"
+          Write-Host "`n=== CONNECTION DETAILS ===" -ForegroundColor Green
+          Write-Host "IP: $tailscaleIP" -ForegroundColor White
+          Write-Host "Username: runneradmin | Password: P@ssw0rd!" -ForegroundColor White
+
+      # === TREO SỐNG SESSION & TỰ ĐỘNG DỌN RAM MỖI 5 PHÚT ===
+      - name: Keep Session Alive & Auto RAM Cleaner
+        run: |
+          Write-Host "`n=== SESSION ACTIVE WITH AUTO RAM CLEANER (EVERY 5 MINS) ===" -ForegroundColor Green
+          $counter = 0
+          while ($true) {
+            $counter++
+            
+            # Giải phóng Garbage Collection & dọn bộ nhớ đệm RAM mỗi 5 phút
+            [System.GC]::Collect()
+            [System.GC]::WaitForPendingFinalizers()
+            
+            Write-Host "Session active & RAM Cleaned - Heartbeat #$counter ($(Get-Date))" -ForegroundColor Cyan
+            
+            # Nghỉ 300 giây (5 phút) cho mỗi lần lặp
+            Start-Sleep -Seconds 300
           }
