@@ -11,22 +11,56 @@ on:
 
 jobs:
   deploy-rdp:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 360
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: System Information
+      # 1. TỐI ƯU DUNG LƯỢNG Ổ CỨNG MAX
+      - name: Free Disk Space (Maximized)
         run: |
-          Write-Host "=== ENIGMANO RDP DEPLOYMENT ===" -ForegroundColor Green
-          Write-Host "Instance Number: ${{ github.event.inputs.instance_number }}" -ForegroundColor Yellow
-          Write-Host "Runner: $env:RUNNER_NAME" -ForegroundColor Yellow
-          Write-Host "Workflow: $env:GITHUB_WORKFLOW" -ForegroundColor Yellow
-          Write-Host "`n=== SYSTEM SPECIFICATIONS ===" -ForegroundColor Cyan
-          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, TotalPhysicalMemory
-          Get-WmiObject -Class Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+          Write-Host "Freeing up maximum disk space..." -ForegroundColor Green
+          $targets = @(
+            "C:\Program Files\dotnet",
+            "C:\Program Files\Android",
+            "C:\Program Files\Java",
+            "C:\hostedtoolcache\windows",
+            "C:\ProgramData\Chocolatey",
+            "C:\Julia",
+            "C:\Haskell"
+          )
+          foreach ($target in $targets) {
+            if (Test-Path $target) {
+              Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue
+            }
+          }
+          Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+          
+          $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+          $freeGB = [math]::Round($disk.FreeSpace / 1GB, 2)
+          Write-Host "Available Space on C: drive: $freeGB GB" -ForegroundColor Cyan
+
+      # 3. TỰ ĐỘNG CÀI SẴN PHẦN MỀM NỀN (Tùy chỉnh chọn phần mềm)
+      - name: Pre-install Essential Software
+        run: |
+          Write-Host "Installing Chocolatey & Apps..." -ForegroundColor Green
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          
+          # Cài đặt sẵn Chrome & 7-Zip (Có thể thêm/bớt app tùy nhu cầu)
+          choco install googlechrome 7zip -y --no-progress
+
+      - name: Optimize System Performance
+        run: |
+          Write-Host "Optimizing System Performance..." -ForegroundColor Green
+          Stop-Service -Name "wuauserv", "sysmain", "WSearch" -ErrorAction SilentlyContinue
+          Set-Service -Name "wuauserv", "sysmain", "WSearch" -StartupType Disabled -ErrorAction SilentlyContinue
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 2
 
       - name: Enable RDP
         run: |
@@ -41,15 +75,12 @@ jobs:
           $Password = ConvertTo-SecureString "P@ssw0rd!" -AsPlainText -Force
           Set-LocalUser -Name "runneradmin" -Password $Password
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin"
-          Write-Host "Username: runneradmin" -ForegroundColor Yellow
-          Write-Host "Password: P@ssw0rd!" -ForegroundColor Yellow
 
       - name: Install Tailscale
         run: |
           Write-Host "Installing Tailscale..." -ForegroundColor Green
           Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale-setup.exe"
           Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
-          Write-Host "Tailscale installed successfully!" -ForegroundColor Green
 
       - name: Authenticate Tailscale
         id: tailscale_auth
@@ -61,7 +92,6 @@ jobs:
             exit 1
           }
           Start-Process -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up --auth-key $authKey --accept-routes" -Wait
-          Write-Host "Tailscale authenticated successfully!" -ForegroundColor Green
 
       - name: Get Tailscale IP with Retry
         id: get_ip
@@ -74,10 +104,8 @@ jobs:
             $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
             if ($ip) {
               $tailscaleIP = $ip.Trim()
-              Write-Host "Tailscale IP obtained: $tailscaleIP" -ForegroundColor Green
               break
             }
-            Write-Host "Waiting for Tailscale IP... attempt $($retries+1)/$maxRetries" -ForegroundColor Yellow
             Start-Sleep -Seconds 3
             $retries++
           }
@@ -85,9 +113,6 @@ jobs:
             Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$tailscaleIP"
             Add-Content -Path $env:GITHUB_OUTPUT -Value "ip=$tailscaleIP"
           } else {
-            Write-Host "::error::Could not obtain Tailscale IP after $maxRetries attempts."
-            Write-Host "Dumping Tailscale status for debugging:"
-            & "C:\Program Files\Tailscale\tailscale.exe" status
             exit 1
           }
 
@@ -96,28 +121,12 @@ jobs:
         run: |
           $tailscaleIP = "${{ steps.get_ip.outputs.ip }}"
           Write-Host "`n=== CONNECTION DETAILS ===" -ForegroundColor Green
-          Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
-          Write-Host "║         TAILSCALE RDP ACCESS          ║" -ForegroundColor Cyan
-          Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Cyan
-          Write-Host "║ IP: $tailscaleIP" -ForegroundColor White
-          Write-Host "║ Username: runneradmin                ║" -ForegroundColor White
-          Write-Host "║ Password: P@ssw0rd!                  ║" -ForegroundColor White
-          Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Cyan
-
-          Write-Host "`nConnection Instructions:" -ForegroundColor Yellow
-          Write-Host "1. Install Tailscale on your device" -ForegroundColor White
-          Write-Host "2. Login with the same Tailscale account" -ForegroundColor White
-          Write-Host "3. Open Remote Desktop Connection" -ForegroundColor White
-          Write-Host "4. Enter the Tailscale IP address above" -ForegroundColor White
-          Write-Host "5. Username: runneradmin | Password: P@ssw0rd!" -ForegroundColor White
-          Write-Host "6. IMPORTANT: Minimize (don't close) this window to keep connection alive!" -ForegroundColor Red
+          Write-Host "IP: $tailscaleIP" -ForegroundColor White
+          Write-Host "Username: runneradmin | Password: P@ssw0rd!" -ForegroundColor White
 
       - name: Keep Session Alive
         run: |
           Write-Host "`n=== SESSION ACTIVE ===" -ForegroundColor Green
-          Write-Host "EnigMano RDP instance is now running!" -ForegroundColor Cyan
-          Write-Host "Instance will remain active for up to 6 hours." -ForegroundColor Yellow
-          Write-Host "Do not close this window to maintain the connection." -ForegroundColor Red
           $counter = 0
           while ($true) {
             $counter++
