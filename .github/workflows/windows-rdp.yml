@@ -32,7 +32,7 @@ jobs:
         run: |
           Write-Host "Optimizing System Performance..." -ForegroundColor Green
           Stop-Service -Name "wuauserv", "sysmain", "WSearch" -ErrorAction SilentlyContinue
-          Set-Service -Name "wuauserv", "sysmain", "WSearch" -StartupType Disabled -ErrorAction SilentlyContinue
+          "wuauserv", "sysmain", "WSearch" | ForEach-Object { Set-Service -Name $_ -StartupType Disabled -ErrorAction SilentlyContinue }
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 2
 
