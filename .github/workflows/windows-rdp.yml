@@ -103,14 +103,19 @@ jobs:
         env:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
+          $username = "runneradmin"
+
           if ([string]::IsNullOrWhiteSpace("$env:RDP_PASSWORD")) {
-              Write-Host "::error::RDP_PASSWORD secret not configured!"
-              exit 1
+              Write-Host "RDP_PASSWORD secret not set - generating a temporary random password instead." -ForegroundColor Yellow
+              Add-Type -AssemblyName System.Web
+              $plainPassword = [System.Web.Security.Membership]::GeneratePassword(16, 4)
+              Add-Content -Path $env:GITHUB_ENV -Value "GENERATED_RDP_PASSWORD=$plainPassword"
+          } else {
+              $plainPassword = "$env:RDP_PASSWORD"
           }
 
-          $username = "runneradmin"
-          $password = ConvertTo-SecureString "$env:RDP_PASSWORD" -AsPlainText -Force
-          
+          $password = ConvertTo-SecureString $plainPassword -AsPlainText -Force
+
           $userExists = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
           
           if ($userExists) {
@@ -245,7 +250,11 @@ jobs:
           Write-Host "========================================" -ForegroundColor Cyan
           Write-Host "IP Address  : ${{ steps.get_ip.outputs.ip }}" -ForegroundColor Yellow
           Write-Host "Username    : runneradmin" -ForegroundColor Yellow
-          Write-Host "Password    : [from RDP_PASSWORD secret]" -ForegroundColor Yellow
+          if ([string]::IsNullOrWhiteSpace("$env:GENERATED_RDP_PASSWORD")) {
+              Write-Host "Password    : (the value you set in the RDP_PASSWORD secret)" -ForegroundColor Yellow
+          } else {
+              Write-Host "Password    : $env:GENERATED_RDP_PASSWORD  (auto-generated - set an RDP_PASSWORD secret to reuse a fixed one)" -ForegroundColor Yellow
+          }
           Write-Host "Instance    : enigmano-rdp-${{ github.event.inputs.instance_number }}" -ForegroundColor Yellow
           Write-Host "Session End : $endTime UTC" -ForegroundColor Yellow
           Write-Host "========================================" -ForegroundColor Cyan
