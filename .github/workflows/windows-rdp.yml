@@ -26,7 +26,7 @@ jobs:
           Write-Host "Workflow: $env:GITHUB_WORKFLOW" -ForegroundColor Yellow
           Write-Host "`n=== SYSTEM SPECIFICATIONS ===" -ForegroundColor Cyan
           Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, TotalPhysicalMemory
-          Get-WmiObject -Class Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+          Get-CimInstance -ClassName Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
 
       # === TỐI ƯU HỆ THỐNG & ÂM THANH ===
       - name: Optimize System Performance & Audio
@@ -51,11 +51,11 @@ jobs:
         run: |
           Write-Host "Optimizing Network TCP/IP & RDP Performance..." -ForegroundColor Green
           netsh int tcp set global autotuninglevel=normal
-          netsh int tcp set global congestionprovider=ctcp -ErrorAction SilentlyContinue
           netsh int tcp set global ecncapability=enabled
           netsh int tcp set global rss=enabled
 
           $netKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
+          if (!(Test-Path $netKey)) { New-Item -Path $netKey -Force }
           Set-ItemProperty -Path $netKey -Name "NetworkThrottlingIndex" -Value 0xffffffff
           Set-ItemProperty -Path $netKey -Name "SystemResponsiveness" -Value 0
 
@@ -64,7 +64,7 @@ jobs:
           Set-ItemProperty -Path $tsPolicy -Name "fEnableWiggling" -Value 0
           Set-ItemProperty -Path $tsPolicy -Name "bEnablerdpsguid" -Value 1
 
-      # === GIẢ LẬP GPU VẢO VỚI MESA3D ===
+      # === GIẢ LẬP GPU ẢO VỚI MESA3D ===
       - name: Install Mesa3D Software GPU
         run: |
           Write-Host "Setting up Mesa3D Software OpenGL/DirectX GPU..." -ForegroundColor Green
@@ -74,7 +74,7 @@ jobs:
           
           Invoke-WebRequest -Uri $mesaUrl -OutFile $outputZip
           if (Test-Path $outputZip) {
-            & "C:\Program Files\7-Zip\7z.exe" x $outputZip -o"$extractPath" -y | Out-Null
+            & "C:\Program Files\7-Zip\7z.exe" x "$outputZip" "-o$extractPath" -y | Out-Null
             Write-Host "Mesa3D installed successfully at $extractPath!" -ForegroundColor Green
           } else {
             Write-Host "Failed to download Mesa3D package." -ForegroundColor Red
@@ -89,10 +89,7 @@ jobs:
 
       - name: Pre-install Essential Software
         run: |
-          Write-Host "Installing Chocolatey & Apps..." -ForegroundColor Green
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          Write-Host "Installing Apps via Chocolatey..." -ForegroundColor Green
           choco install googlechrome 7zip -y --no-progress
 
       - name: Create User Account
@@ -100,7 +97,7 @@ jobs:
           Write-Host "Setting up user account..." -ForegroundColor Green
           $Password = ConvertTo-SecureString "P@ssw0rd!" -AsPlainText -Force
           Set-LocalUser -Name "runneradmin" -Password $Password
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
 
       - name: Install Tailscale
         run: |
@@ -109,15 +106,15 @@ jobs:
           Start-Process -FilePath "tailscale-setup.exe" -ArgumentList "/S" -Wait
 
       - name: Authenticate Tailscale
-        id: tailscale_auth
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           Write-Host "Authenticating Tailscale..." -ForegroundColor Green
-          $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
-          if ([string]::IsNullOrEmpty($authKey)) {
+          if ([string]::IsNullOrEmpty($env:TAILSCALE_AUTH_KEY)) {
             Write-Host "::error::TAILSCALE_AUTH_KEY secret is not set!"
             exit 1
           }
-          Start-Process -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up --auth-key $authKey --accept-routes" -Wait
+          Start-Process -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up --auth-key $env:TAILSCALE_AUTH_KEY --accept-routes" -Wait
 
       - name: Get Tailscale IP with Retry
         id: get_ip
@@ -139,15 +136,15 @@ jobs:
             Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$tailscaleIP"
             Add-Content -Path $env:GITHUB_OUTPUT -Value "ip=$tailscaleIP"
           } else {
+            Write-Host "::error::Failed to retrieve Tailscale IP"
             exit 1
           }
 
       - name: Show Connection Details
         if: success()
         run: |
-          $tailscaleIP = "${{ steps.get_ip.outputs.ip }}"
           Write-Host "`n=== CONNECTION DETAILS ===" -ForegroundColor Green
-          Write-Host "IP: $tailscaleIP" -ForegroundColor White
+          Write-Host "IP: ${{ steps.get_ip.outputs.ip }}" -ForegroundColor White
           Write-Host "Username: runneradmin | Password: P@ssw0rd!" -ForegroundColor White
 
       - name: Keep Session Alive
