@@ -3,13 +3,8 @@ name: EnigMano RDP via Tailscale
 on:
   workflow_dispatch:
     inputs:
-      instance_number:
-        description: 'Instance Number (1-10)'
-        required: true
-        default: '1'
-        type: string
       duration_minutes:
-        description: 'Session Duration (minutes, 1-360)'
+        description: 'Session Duration (minutes, 1-350)'
         required: false
         default: '180'
         type: string
@@ -26,17 +21,29 @@ jobs:
       - name: System Information
         shell: powershell
         run: |
+          $ErrorActionPreference = 'SilentlyContinue'
+          $ProgressPreference = 'SilentlyContinue'
           Write-Host "=== ENIGMANO RDP DEPLOYMENT ===" -ForegroundColor Green
-          Write-Host "Instance Number: ${{ github.event.inputs.instance_number }}" -ForegroundColor Yellow
-          Write-Host "Session Duration: ${{ github.event.inputs.duration_minutes }} minutes" -ForegroundColor Yellow
+          
+          $durationRaw = "${{ github.event.inputs.duration_minutes }}"
+          $duration = 180
+          if ([int]::TryParse($durationRaw, [ref]$duration)) {
+              if ($duration -lt 1) { $duration = 180 }
+              if ($duration -gt 350) { $duration = 350 }
+          } else {
+              $duration = 180
+          }
+          
+          Write-Host "Session Duration: $duration minutes" -ForegroundColor Yellow
           Get-CimInstance -ClassName Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
 
       - name: Optimize System & Audio
         shell: powershell
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
-          $services = @("wuauserv", "sysmain", "WSearch")
           
+          # Tắt dịch vụ ngầm
+          $services = @("wuauserv", "sysmain", "WSearch")
           foreach ($service in $services) {
               $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
               if ($svc) {
@@ -46,57 +53,61 @@ jobs:
               }
           }
           
-          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
-          Write-Host "Power plan set to High Performance" -ForegroundColor Green
-
+          # Chuyển sang High Performance
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
+          
+          # Tối ưu hiệu ứng đồ họa
           $vfxPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
           if (!(Test-Path $vfxPath)) { New-Item -Path $vfxPath -Force | Out-Null }
-          Set-ItemProperty -Path $vfxPath -Name VisualFXSetting -Value 2
-          Write-Host "Visual effects minimized" -ForegroundColor Green
+          Set-ItemProperty -Path $vfxPath -Name VisualFXSetting -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue
 
+          # Bật Âm thanh RDP
           $audioServices = @("AudioEndpointBuilder", "Audiosrv")
           foreach ($service in $audioServices) {
               $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
               if ($svc) {
                   Set-Service -Name $service -StartupType Automatic
                   Start-Service -Name $service
-                  Write-Host "Enabled audio service: $service" -ForegroundColor Green
               }
           }
-          
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "fDisableAudio" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "fDisableAudio" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
 
-      - name: Optimize Network & RDP Performance
+      - name: Optimize Network & RDP Settings
         shell: powershell
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
-          netsh int tcp set global autotuninglevel=normal
-          netsh int tcp set global rss=enabled
-          Write-Host "Network optimization complete" -ForegroundColor Green
+          netsh int tcp set global autotuninglevel=normal | Out-Null
+          netsh int tcp set global rss=enabled | Out-Null
 
           $netKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
           if (!(Test-Path $netKey)) { New-Item -Path $netKey -Force | Out-Null }
-          Set-ItemProperty -Path $netKey -Name "NetworkThrottlingIndex" -Value 0xffffffff
-          Set-ItemProperty -Path $netKey -Name "SystemResponsiveness" -Value 0
+          Set-ItemProperty -Path $netKey -Name "NetworkThrottlingIndex" -Value 0xffffffff -Type DWord -Force -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path $netKey -Name "SystemResponsiveness" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
 
           $tsPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
           if (!(Test-Path $tsPolicy)) { New-Item -Path $tsPolicy -Force | Out-Null }
-          Set-ItemProperty -Path $tsPolicy -Name "fEnableWiggling" -Value 0
-          Set-ItemProperty -Path $tsPolicy -Name "bEnablerdpsguid" -Value 1
-          Write-Host "RDP performance settings applied" -ForegroundColor Green
+          Set-ItemProperty -Path $tsPolicy -Name "fEnableWiggling" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path $tsPolicy -Name "bEnablerdpsguid" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
 
-      - name: Enable Remote Desktop
+          # Tắt Screen Saver & Lock Screen
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "ScreenSaveActive" -Value "0" -Force -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "ScreenSaverIsSecure" -Value "0" -Force -ErrorAction SilentlyContinue
+          Write-Host "Network & RDP settings optimized" -ForegroundColor Green
+
+      - name: Enable Remote Desktop & Firewall
         shell: powershell
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Write-Host "Remote Desktop enabled" -ForegroundColor Green
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+          
+          $rdpTcp = 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+          Set-ItemProperty -Path $rdpTcp -Name "UserAuthentication" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path $rdpTcp -Name "PortNumber" -Value 3389 -Type DWord -Force -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "RequireSecurityLayer" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
           
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-          Write-Host "Firewall rules configured" -ForegroundColor Green
-          
-          # Disable NLA for RDP access without handshake issues
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-          Write-Host "NLA disabled for compatibility" -ForegroundColor Green
+          netsh advfirewall firewall set rule group="remote desktop" new enable=Yes | Out-Null
+          netsh advfirewall firewall add rule name="RDP_TCP_3389" dir=in action=allow protocol=TCP localport=3389 | Out-Null
+          Write-Host "Remote Desktop & Firewall configured" -ForegroundColor Green
 
       - name: Create Dedicated RDP User
         shell: powershell
@@ -106,9 +117,21 @@ jobs:
           $username = "runneradmin"
 
           if ([string]::IsNullOrWhiteSpace("$env:RDP_PASSWORD")) {
-              Write-Host "RDP_PASSWORD secret not set - generating a temporary random password instead." -ForegroundColor Yellow
-              Add-Type -AssemblyName System.Web
-              $plainPassword = [System.Web.Security.Membership]::GeneratePassword(16, 4)
+              Write-Host "RDP_PASSWORD secret not set - generating compliant random password." -ForegroundColor Yellow
+              
+              $u = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+              $l = 'abcdefghijklmnopqrstuvwxyz'
+              $d = '0123456789'
+              $s = '!@#%*-_+='
+              $all = $u + $l + $d + $s
+              
+              $p1 = $u[(Get-Random -Max $u.Length)]
+              $p2 = $l[(Get-Random -Max $l.Length)]
+              $p3 = $d[(Get-Random -Max $d.Length)]
+              $p4 = $s[(Get-Random -Max $s.Length)]
+              $rest = (1..12 | ForEach-Object { $all[(Get-Random -Max $all.Length)] }) -join ''
+              
+              $plainPassword = "$p1$p2$p3$p4$rest"
               Add-Content -Path $env:GITHUB_ENV -Value "GENERATED_RDP_PASSWORD=$plainPassword"
           } else {
               $plainPassword = "$env:RDP_PASSWORD"
@@ -117,96 +140,105 @@ jobs:
           $password = ConvertTo-SecureString $plainPassword -AsPlainText -Force
 
           $userExists = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
-          
           if ($userExists) {
               Set-LocalUser -Name $username -Password $password
-              Write-Host "User password updated" -ForegroundColor Green
+              Write-Host "Password updated for $username" -ForegroundColor Green
           } else {
               New-LocalUser -Name $username -Password $password -FullName "RDP Admin" -PasswordNeverExpires | Out-Null
-              Write-Host "User created: $username" -ForegroundColor Green
+              Write-Host "User $username created" -ForegroundColor Green
           }
           
           Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
-          Write-Host "User added to groups" -ForegroundColor Green
 
-      - name: Install Chocolatey
+      - name: Install Software & Gigabit Tools
         shell: powershell
         run: |
-          if (-not (Test-Path "C:\ProgramData\chocolatey")) {
-              Write-Host "Installing Chocolatey..." -ForegroundColor Green
-              Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-              Write-Host "Chocolatey installed" -ForegroundColor Green
-          } else {
-              Write-Host "Chocolatey already installed" -ForegroundColor Green
-          }
-
-      - name: Install Essential Software
-        shell: powershell
-        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "Installing Chrome, 7-Zip, Aria2, Rclone, and Git..." -ForegroundColor Green
+          
           try {
-              Write-Host "Installing software packages..." -ForegroundColor Green
-              choco install 7zip -y --no-progress --ignore-checksums -ErrorAction SilentlyContinue
-              choco install googlechrome -y --no-progress --ignore-checksums -ErrorAction SilentlyContinue
-              Write-Host "Software installation complete" -ForegroundColor Green
+              choco install 7zip googlechrome aria2 rclone git -y --no-progress --ignore-checksums
           } catch {
-              Write-Host "Warning: Software installation encountered issues: $_" -ForegroundColor Yellow
+              Write-Host "Warning: Some packages had minor installation issues, proceeding..." -ForegroundColor Yellow
           }
+          
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\ProgramData\chocolatey\bin"
+          $env:Path += ";C:\ProgramData\chocolatey\bin"
+          Write-Host "Software packages step completed" -ForegroundColor Green
 
-      - name: Install Mesa3D Software GPU (Optional)
+      - name: Setup Fast Download Environment on Desktop
         shell: powershell
         run: |
-          try {
-              Write-Host "Installing Mesa3D..." -ForegroundColor Green
-              $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/download/23.1.5/mesa3d-23.1.5-release-msvc.7z"
-              $outputFile = "$env:TEMP\mesa3d.7z"
-              $extractPath = "C:\Mesa3D"
-
-              Invoke-WebRequest -Uri $mesaUrl -OutFile $outputFile -UseBasicParsing -TimeoutSec 30
-              
-              if (Test-Path $outputFile) {
-                  if (!(Test-Path $extractPath)) { New-Item -ItemType Directory -Path $extractPath -Force | Out-Null }
-                  & "C:\Program Files\7-Zip\7z.exe" x "$outputFile" "-o$extractPath" -y | Out-Null
-                  Write-Host "Mesa3D extracted successfully" -ForegroundColor Green
-                  Remove-Item $outputFile -Force -ErrorAction SilentlyContinue
-              }
-          } catch {
-              Write-Host "Mesa3D installation skipped: $_" -ForegroundColor Yellow
-          }
+          $desktopPath = "C:\Users\runneradmin\Desktop"
+          if (!(Test-Path $desktopPath)) { New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null }
+          
+          $downloadDir = "$desktopPath\Gigabit_Downloads"
+          if (!(Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null }
+          
+          # Dùng mảng chuỗi ghép dòng để tránh hoàn toàn lỗi cú pháp Here-String trong YAML
+          $lines = @(
+              '@echo off',
+              'title Gigabit Multi-Thread Downloader (Aria2)',
+              'echo ====================================================',
+              'echo   ENIGMANO GIGABIT DOWNLOADER (16 Threads)',
+              'echo ====================================================',
+              'set /p url="Paste direct download URL: "',
+              'if "%url%"=="" exit',
+              'aria2c -x 16 -s 16 -k 1M -d "%USERPROFILE%\Desktop\Gigabit_Downloads" "%url%"',
+              'echo.',
+              'echo Download completed in Desktop\Gigabit_Downloads folder.',
+              'pause'
+          )
+          $ariaScript = $lines -join "`r`n"
+          
+          Set-Content -Path "$desktopPath\Fast_Download.bat" -Value $ariaScript -Encoding ASCII
+          Write-Host "Gigabit download environment ready on Desktop" -ForegroundColor Green
 
       - name: Install & Authenticate Tailscale
         shell: powershell
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
+          $ProgressPreference = 'SilentlyContinue'
           if ([string]::IsNullOrWhiteSpace("$env:TAILSCALE_AUTH_KEY")) {
-              Write-Host "::error::TAILSCALE_AUTH_KEY secret not configured in GitHub Secrets!"
+              Write-Host "::error::TAILSCALE_AUTH_KEY secret is missing!"
               exit 1
           }
 
-          Write-Host "Downloading Tailscale..." -ForegroundColor Green
-          $tailscaleInstaller = "$env:TEMP\tailscale-setup.exe"
-          try {
-              Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile $tailscaleInstaller -UseBasicParsing -TimeoutSec 30
-              
-              Write-Host "Installing Tailscale..." -ForegroundColor Green
-              Start-Process -FilePath $tailscaleInstaller -ArgumentList "/S" -Wait
+          Write-Host "Installing Tailscale via Chocolatey..." -ForegroundColor Green
+          choco install tailscale -y --no-progress --ignore-checksums
+
+          $tsDir = "C:\Program Files\Tailscale"
+          if (Test-Path $tsDir) {
+              Add-Content -Path $env:GITHUB_PATH -Value $tsDir
+              $env:Path += ";$tsDir"
+          }
+
+          # Vòng lặp chờ Service Tailscale đăng ký thành công vào hệ thống Windows
+          $retrySvc = 0
+          $tsSvc = $null
+          while ($retrySvc -lt 10) {
+              $tsSvc = Get-Service | Where-Object { $_.Name -like "*tailscale*" } -ErrorAction SilentlyContinue
+              if ($tsSvc) { break }
+              $retrySvc++
               Start-Sleep -Seconds 2
-              
+          }
+
+          if ($tsSvc -and $tsSvc.Status -ne 'Running') {
+              Start-Service -Name $tsSvc.Name -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 3
+          }
+
+          $tsPath = (Get-Command tailscale.exe -ErrorAction SilentlyContinue).Path
+          if (-not $tsPath) { $tsPath = "$tsDir\tailscale.exe" }
+
+          if (Test-Path $tsPath) {
               Write-Host "Authenticating Tailscale..." -ForegroundColor Green
-              $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
-              
-              if (Test-Path $tsPath) {
-                  & $tsPath up --auth-key="$env:TAILSCALE_AUTH_KEY" --accept-routes --hostname="enigmano-rdp-${{ github.event.inputs.instance_number }}"
-                  Write-Host "Tailscale authenticated successfully" -ForegroundColor Green
-              } else {
-                  Write-Host "::error::Tailscale installation path not found!"
-                  exit 1
-              }
-          } catch {
-              Write-Host "::error::Tailscale installation failed: $_"
+              & $tsPath up --auth-key="$env:TAILSCALE_AUTH_KEY" --accept-routes --hostname="enigmano-rdp" --reset --ephemeral --unattended
+              Write-Host "Tailscale authenticated successfully" -ForegroundColor Green
+          } else {
+              Write-Host "::error::Tailscale executable not found!"
               exit 1
           }
 
@@ -214,18 +246,21 @@ jobs:
         id: get_ip
         shell: powershell
         run: |
-          $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
+          $tsPath = (Get-Command tailscale.exe -ErrorAction SilentlyContinue).Path
+          if (-not $tsPath) { $tsPath = "C:\Program Files\Tailscale\tailscale.exe" }
+          
           $tailscaleIP = $null
           $maxRetries = 30
           $retryCount = 0
 
-          Write-Host "Retrieving Tailscale IP address..." -ForegroundColor Green
-          
+          Write-Host "Waiting for Tailscale IP..." -ForegroundColor Green
           while ($retryCount -lt $maxRetries) {
-              $ip = & $tsPath ip -4 2>$null
-              if ($ip -and $ip.Trim() -ne "") {
-                  $tailscaleIP = $ip.Trim()
-                  break
+              if (Test-Path $tsPath) {
+                  $ip = & $tsPath ip -4 2>$null
+                  if ($ip -and $ip.Trim() -ne "") {
+                      $tailscaleIP = $ip.Trim()
+                      break
+                  }
               }
               $retryCount++
               Start-Sleep -Seconds 2
@@ -235,14 +270,21 @@ jobs:
               Write-Host "Tailscale IP acquired: $tailscaleIP" -ForegroundColor Green
               Add-Content -Path $env:GITHUB_OUTPUT -Value "ip=$tailscaleIP"
           } else {
-              Write-Host "::error::Failed to obtain Tailscale IP after $maxRetries attempts"
+              Write-Host "::error::Failed to acquire Tailscale IP"
               exit 1
           }
 
       - name: Display Connection Details
         shell: powershell
         run: |
-          $duration = [int]"${{ github.event.inputs.duration_minutes }}"
+          $durationRaw = "${{ github.event.inputs.duration_minutes }}"
+          $duration = 180
+          if ([int]::TryParse($durationRaw, [ref]$duration)) {
+              if ($duration -lt 1) { $duration = 180 }
+              if ($duration -gt 350) { $duration = 350 }
+          } else {
+              $duration = 180
+          }
           $endTime = (Get-Date).AddMinutes($duration)
           
           Write-Host "`n========================================" -ForegroundColor Cyan
@@ -251,11 +293,11 @@ jobs:
           Write-Host "IP Address  : ${{ steps.get_ip.outputs.ip }}" -ForegroundColor Yellow
           Write-Host "Username    : runneradmin" -ForegroundColor Yellow
           if ([string]::IsNullOrWhiteSpace("$env:GENERATED_RDP_PASSWORD")) {
-              Write-Host "Password    : (the value you set in the RDP_PASSWORD secret)" -ForegroundColor Yellow
+              Write-Host "Password    : (Value configured in RDP_PASSWORD secret)" -ForegroundColor Yellow
           } else {
-              Write-Host "Password    : $env:GENERATED_RDP_PASSWORD  (auto-generated - set an RDP_PASSWORD secret to reuse a fixed one)" -ForegroundColor Yellow
+              Write-Host "Password    : $env:GENERATED_RDP_PASSWORD" -ForegroundColor Yellow
           }
-          Write-Host "Instance    : enigmano-rdp-${{ github.event.inputs.instance_number }}" -ForegroundColor Yellow
+          Write-Host "Hostname    : enigmano-rdp" -ForegroundColor Yellow
           Write-Host "Session End : $endTime UTC" -ForegroundColor Yellow
           Write-Host "========================================" -ForegroundColor Cyan
           Write-Host ""
@@ -263,23 +305,25 @@ jobs:
       - name: Keep Session Alive
         shell: powershell
         run: |
-          $durationMinutes = [int]"${{ github.event.inputs.duration_minutes }}"
+          $durationRaw = "${{ github.event.inputs.duration_minutes }}"
+          $durationMinutes = 180
+          if ([int]::TryParse($durationRaw, [ref]$durationMinutes)) {
+              if ($durationMinutes -lt 1) { $durationMinutes = 180 }
+              if ($durationMinutes -gt 350) { $durationMinutes = 350 }
+          } else {
+              $durationMinutes = 180
+          }
           $endTime = (Get-Date).AddMinutes($durationMinutes)
           $heartbeatCount = 0
 
-          Write-Host "Session keeper started - will run for $durationMinutes minutes" -ForegroundColor Green
+          Write-Host "Session keeper started - Running for $durationMinutes minutes..." -ForegroundColor Green
           
           while ((Get-Date) -lt $endTime) {
               $heartbeatCount++
-              $elapsed = [math]::Round(((Get-Date) - (Get-Date).AddMinutes(-$durationMinutes)).TotalMinutes)
-              $remaining = $durationMinutes - $elapsed
-              
-              Write-Host "Heartbeat #$heartbeatCount | Time Remaining: ${remaining}m | $(Get-Date -Format 'HH:mm:ss')" -ForegroundColor Green
-              
-              # Keep system awake
-              [System.Runtime.InteropServices.Marshal]::GetActiveObject("WScript.Shell").SendKeys("+")
-              
+              $now = Get-Date
+              $timeLeft = [math]::Max(0, [math]::Round(($endTime - $now).TotalMinutes))
+              Write-Host "Heartbeat #$heartbeatCount | Time Remaining: ${timeLeft}m | Timestamp: $($now.ToString('HH:mm:ss')) UTC" -ForegroundColor Green
               Start-Sleep -Seconds 60
           }
           
-          Write-Host "Session duration completed - workflow will end" -ForegroundColor Yellow
+          Write-Host "Session expired cleanly." -ForegroundColor Yellow
