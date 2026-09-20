@@ -1,4 +1,4 @@
-name: Windows Server 2022 RDP (Balanced)
+name: Windows Server 2022 RDP + Tailscale
 
 on:
   workflow_dispatch:
@@ -9,88 +9,126 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    # ========== 1. TỐI ƯU VỪA PHẢI ==========
+    # ========== 1. TỐI ƯU HỆ THỐNG ==========
     - name: Tối ưu hệ thống
       run: |
-        # Tắt vài dịch vụ nền không cần thiết (an toàn)
         $svc = @("SysMain","Spooler","DiagTrack","WSearch")
         foreach ($s in $svc) {
           Set-Service -Name $s -StartupType Disabled -ErrorAction SilentlyContinue
           Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
         }
-
-        # Tắt telemetry (nhẹ, không ảnh hưởng bảo mật)
         Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name "AllowTelemetry" -Value 0 -ErrorAction SilentlyContinue
-
-        # Tắt hiệu ứng hình ảnh cho UI mượt hơn
         Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name "VisualFXSetting" -Value 2 -ErrorAction SilentlyContinue
-
-        # Tắt transparency
         Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name "EnableTransparency" -Value 0 -ErrorAction SilentlyContinue
 
-    # ========== 2. TỐI ƯU RDP ==========
-    - name: Tối ưu RDP
+    # ========== 2. TỐI ƯU & BẬT RDP ==========
+    - name: Cấu hình và tối ưu RDP
       run: |
-        # Bật RDP
         Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
-
-        # FPS ~60
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmFrameInterval" -Value 16 -Type DWord
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmMaxQueuedBuffers" -Value 16 -Type DWord
-
-        # Ưu tiên băng thông RDP
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TermDD' -Name "FlowControlDisable" -Value 1 -Type DWord
-
-        # Không tự ngắt session
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmFrameInterval" -Value 16 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmMaxQueuedBuffers" -Value 16 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TermDD' -Name "FlowControlDisable" -Value 1 -Type DWord -ErrorAction SilentlyContinue
         Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "MaxIdleTime" -Value 0 -Type DWord -ErrorAction SilentlyContinue
 
     # ========== 3. USER + FIREWALL ==========
-    - name: Cấu hình User
+    - name: Cấu hình User và Firewall
       run: |
+        # Đổi mật khẩu tài khoản runneradmin
         $pass = ConvertTo-SecureString "P@ssw0rd_RDP_2024!" -AsPlainText -Force
         Set-LocalUser -Name "runneradmin" -Password $pass
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-    # ========== 4. CHROME ==========
-    - name: Kiểm tra Chrome
+        # Thêm runneradmin vào Remote Desktop Users group
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
+
+        # Bật Firewall cho Remote Desktop
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+        New-NetFirewallRule -DisplayName "Allow-RDP-In-TCP" -Profile Any -Direction Inbound -Protocol TCP -LocalPort 3389 -Action Allow -ErrorAction SilentlyContinue
+        New-NetFirewallRule -DisplayName "Allow-RDP-In-UDP" -Profile Any -Direction Inbound -Protocol UDP -LocalPort 3389 -Action Allow -ErrorAction SilentlyContinue
+
+        # Khởi động dịch vụ RDP
+        Set-Service -Name "TermService" -StartupType Automatic
+        Start-Service -Name "TermService" -ErrorAction SilentlyContinue
+
+        Write-Host "Firewall và RDP đã được cấu hình thành công."
+
+    # ========== 4. GOOGLE CHROME ==========
+    - name: Cài đặt Chrome
       run: |
         $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-        if (Test-Path $chrome) {
-          Write-Host "Chrome OK:"; & $chrome --version
-        } else {
+        if (-not (Test-Path $chrome)) {
           choco install googlechrome -y --no-progress
         }
-
-        # Shortcut Chrome ra Desktop
         $ws = New-Object -ComObject WScript.Shell
         $sc = $ws.CreateShortcut("C:\Users\runneradmin\Desktop\Google Chrome.lnk")
-        $sc.TargetPath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+        $sc.TargetPath = $chrome
         $sc.Save()
 
-    # ========== 5. NGROK ==========
-    - name: Chạy Ngrok
+    # ========== 5. TAILSCALE ==========
+    - name: Cài đặt & Cấu hình Tailscale
+      env:
+        TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+      run: |
+        if (-not (Test-Path "C:\Program Files\Tailscale\tailscale.exe")) {
+          choco install tailscale -y --no-progress
+        }
+        
+        # Thêm Tailscale vào PATH vĩnh viễn cho toàn bộ workflow
+        echo "C:\Program Files\Tailscale" >> $env:GITHUB_PATH
+        $ts = "C:\Program Files\Tailscale\tailscale.exe"
+
+        Write-Host "Đang kết nối Tailscale..."
+        & $ts up --authkey $env:TS_AUTHKEY --hostname "gh-rdp-win2022" --unattended
+
+        Start-Sleep -Seconds 10
+
+        # Lấy IP Tailscale
+        $tsIp = (& $ts ip -4).Trim()
+        Write-Host "IP Tailscale của VPS: $tsIp" -ForegroundColor Cyan
+
+        # Cho phép dải IP của Tailscale qua Firewall
+        New-NetFirewallRule -DisplayName "Allow-Tailscale-RDP" -Profile Any -Direction Inbound -Protocol TCP -LocalPort 3389 -RemoteAddress 100.64.0.0/10 -Action Allow -ErrorAction SilentlyContinue
+
+        Write-Host "=========================================" -ForegroundColor Green
+        Write-Host "  RDP KẾT NỐI QUA TAILSCALE:" -ForegroundColor Yellow
+        Write-Host "  IP   : $tsIp" -ForegroundColor Cyan
+        Write-Host "  USER : runneradmin" -ForegroundColor Cyan
+        Write-Host "  PASS : P@ssw0rd_RDP_2024!" -ForegroundColor Cyan
+        Write-Host "=========================================" -ForegroundColor Green
+
+    # ========== 6. NGROK (DỰ PHÒNG) ==========
+    - name: Chạy Ngrok dự phòng
       env:
         NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
       run: |
-        Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-        Expand-Archive ngrok.zip
-        .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
-        Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
+        if ($env:NGROK_AUTH_TOKEN) {
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+          Expand-Archive -Path "ngrok.zip" -DestinationPath "." -Force
+          
+          .\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
+          
+          Start-Sleep -Seconds 10
+          try {
+            $info = Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
+            $url = $info.tunnels[0].public_url
+            Write-Host "=========================================" -ForegroundColor Green
+            Write-Host "  RDP KẾT NỐI QUA NGROK:" -ForegroundColor Yellow
+            Write-Host "  URL  : $url" -ForegroundColor Cyan
+            Write-Host "=========================================" -ForegroundColor Green
+          } catch { 
+            Write-Host "Không lấy được thông tin Ngrok URL." -ForegroundColor Red
+          }
+        } else {
+          Write-Host "Bỏ qua Ngrok vì không tìm thấy NGROK_AUTH_TOKEN trong Secrets."
+        }
 
-        Start-Sleep -Seconds 15
-        try {
-          $info = Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
-          Write-Host "=====================================" -ForegroundColor Green
-          Write-Host " RDP : $($info.tunnels[0].public_url)" -ForegroundColor Yellow
-          Write-Host " USER: runneradmin" -ForegroundColor Yellow
-          Write-Host " PASS: P@ssw0rd_RDP_2024!" -ForegroundColor Yellow
-          Write-Host "=====================================" -ForegroundColor Green
-        } catch { Write-Host "Xem log ngrok ở trên" }
-
-        # Keep-alive 5h50
+    # ========== 7. KEEP-ALIVE ==========
+    - name: Giữ chạy 5 tiếng 50 phút
+      run: |
         $end = (Get-Date).AddMinutes(350)
         while ((Get-Date) -lt $end) {
-          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Session alive..."
-          Start-Sleep -Seconds 60
+          $timeLeft = $end - (Get-Date)
+          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] VPS đang chạy... Thời gian còn lại: $($timeLeft.Hours)h $($timeLeft.Minutes)m"
+          Start-Sleep -Seconds 300
         }
