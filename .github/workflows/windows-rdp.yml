@@ -1,329 +1,166 @@
-name: EnigMano RDP via Tailscale
+name: Windows Server 2022 MAX CONFIG
 
 on:
   workflow_dispatch:
-    inputs:
-      duration_minutes:
-        description: 'Session Duration (minutes, 1-350)'
-        required: false
-        default: '180'
-        type: string
+  schedule:
+    - cron: '0 */5 * * *'
 
 jobs:
-  deploy-rdp:
+  build:
     runs-on: windows-2022
     timeout-minutes: 360
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    # ================= 1. TỐI ƯU CPU + RAM =================
+    - name: Tối ưu CPU và RAM
+      run: |
+        # Tắt toàn bộ dịch vụ ngốn tài nguyên
+        $svc = @(
+          "SysMain","Spooler","DiagTrack","WSearch","MapsBroker",
+          "XblAuthManager","XblGameSave","XboxNetApiSvc","XboxGipSvc",
+          "RetailDemo","PcaSvc","WMPNetworkSvc","Fax","RemoteRegistry",
+          "TabletInputService","WerSvc","TrustedInstaller","wuauserv",
+          "BITS","DoSvc","WpnService","WpnUserService"
+        )
+        foreach ($s in $svc) {
+          Set-Service -Name $s -StartupType Disabled -ErrorAction SilentlyContinue
+          Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
+        }
 
-      - name: System Information
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'SilentlyContinue'
-          $ProgressPreference = 'SilentlyContinue'
-          Write-Host "=== ENIGMANO RDP DEPLOYMENT ===" -ForegroundColor Green
-          
-          $durationRaw = "${{ github.event.inputs.duration_minutes }}"
-          $duration = 180
-          if ([int]::TryParse($durationRaw, [ref]$duration)) {
-              if ($duration -lt 1) { $duration = 180 }
-              if ($duration -gt 350) { $duration = 350 }
-          } else {
-              $duration = 180
-          }
-          
-          Write-Host "Session Duration: $duration minutes" -ForegroundColor Yellow
-          Get-CimInstance -ClassName Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+        # Tắt Windows Defender hoàn toàn (giảm CPU + RAM mạnh)
+        Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableBehaviorMonitoring $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableArchiveScanning $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableIntrusionPreventionSystem $true -ErrorAction SilentlyContinue
+        Set-MpPreference -MAPSReporting 0 -ErrorAction SilentlyContinue
+        Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue
 
-      - name: Optimize System & Audio
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'SilentlyContinue'
-          
-          # Tắt dịch vụ ngầm
-          $services = @("wuauserv", "sysmain", "WSearch")
-          foreach ($service in $services) {
-              $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
-              if ($svc) {
-                  Stop-Service -Name $service -Force
-                  Set-Service -Name $service -StartupType Disabled
-                  Write-Host "Disabled service: $service" -ForegroundColor Green
-              }
-          }
-          
-          # Chuyển sang High Performance
-          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
-          
-          # Tối ưu hiệu ứng đồ họa
-          $vfxPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
-          if (!(Test-Path $vfxPath)) { New-Item -Path $vfxPath -Force | Out-Null }
-          Set-ItemProperty -Path $vfxPath -Name VisualFXSetting -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue
+        # Tắt Windows Update hoàn toàn
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name "NoAutoUpdate" -Value 1 -ErrorAction SilentlyContinue
 
-          # Bật Âm thanh RDP
-          $audioServices = @("AudioEndpointBuilder", "Audiosrv")
-          foreach ($service in $audioServices) {
-              $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
-              if ($svc) {
-                  Set-Service -Name $service -StartupType Automatic
-                  Start-Service -Name $service
-              }
-          }
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "fDisableAudio" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        # Tắt Telemetry
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name "AllowTelemetry" -Value 0 -ErrorAction SilentlyContinue
 
-      - name: Optimize Network & RDP Settings
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'SilentlyContinue'
-          netsh int tcp set global autotuninglevel=normal | Out-Null
-          netsh int tcp set global rss=enabled | Out-Null
+        # Tắt Cortana
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' -Name "AllowCortana" -Value 0 -ErrorAction SilentlyContinue
 
-          $netKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
-          if (!(Test-Path $netKey)) { New-Item -Path $netKey -Force | Out-Null }
-          Set-ItemProperty -Path $netKey -Name "NetworkThrottlingIndex" -Value 0xffffffff -Type DWord -Force -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path $netKey -Name "SystemResponsiveness" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        # Tắt hiệu ứng hình ảnh (tăng tốc UI)
+        Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name "VisualFXSetting" -Value 2 -ErrorAction SilentlyContinue
 
-          $tsPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
-          if (!(Test-Path $tsPolicy)) { New-Item -Path $tsPolicy -Force | Out-Null }
-          Set-ItemProperty -Path $tsPolicy -Name "fEnableWiggling" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path $tsPolicy -Name "bEnablerdpsguid" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+        # Tắt transparency
+        Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name "EnableTransparency" -Value 0 -ErrorAction SilentlyContinue
 
-          # Tắt Screen Saver & Lock Screen
-          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "ScreenSaveActive" -Value "0" -Force -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "ScreenSaverIsSecure" -Value "0" -Force -ErrorAction SilentlyContinue
-          Write-Host "Network & RDP settings optimized" -ForegroundColor Green
+    # ================= 2. TỐI ƯU RDP SIÊU MƯỢT =================
+    - name: Tối ưu RDP chuyên sâu
+      run: |
+        # Bật RDP
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-      - name: Enable Remote Desktop & Firewall
-        shell: powershell
-        run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-          
-          $rdpTcp = 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
-          Set-ItemProperty -Path $rdpTcp -Name "UserAuthentication" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path $rdpTcp -Name "PortNumber" -Value 3389 -Type DWord -Force -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "RequireSecurityLayer" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-          
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-          netsh advfirewall firewall set rule group="remote desktop" new enable=Yes | Out-Null
-          netsh advfirewall firewall add rule name="RDP_TCP_3389" dir=in action=allow protocol=TCP localport=3389 | Out-Null
-          Write-Host "Remote Desktop & Firewall configured" -ForegroundColor Green
+        # Cho phép nhiều session
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Type DWord
 
-      - name: Create Dedicated RDP User
-        shell: powershell
-        env:
-          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
-        run: |
-          $username = "runneradmin"
+        # FPS cao + buffer lớn (60 FPS mượt)
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmFrameInterval" -Value 16 -Type DWord
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmMaxQueuedBuffers" -Value 32 -Type DWord
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmMaxPendingFrames" -Value 16 -Type DWord
 
-          if ([string]::IsNullOrWhiteSpace("$env:RDP_PASSWORD")) {
-              Write-Host "RDP_PASSWORD secret not set - generating compliant random password." -ForegroundColor Yellow
-              
-              $u = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-              $l = 'abcdefghijklmnopqrstuvwxyz'
-              $d = '0123456789'
-              $s = '!@#%*-_+='
-              $all = $u + $l + $d + $s
-              
-              $p1 = $u[(Get-Random -Max $u.Length)]
-              $p2 = $l[(Get-Random -Max $l.Length)]
-              $p3 = $d[(Get-Random -Max $d.Length)]
-              $p4 = $s[(Get-Random -Max $s.Length)]
-              $rest = (1..12 | ForEach-Object { $all[(Get-Random -Max $all.Length)] }) -join ''
-              
-              $plainPassword = "$p1$p2$p3$p4$rest"
-              Add-Content -Path $env:GITHUB_ENV -Value "GENERATED_RDP_PASSWORD=$plainPassword"
-          } else {
-              $plainPassword = "$env:RDP_PASSWORD"
-          }
+        # Băng thông RDP tối đa
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TermDD' -Name "FlowControlDisable" -Value 1 -Type DWord
 
-          $password = ConvertTo-SecureString $plainPassword -AsPlainText -Force
+        # Cho phép RemoteFX (GPU acceleration)
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fEnableRemoteFXAdvancedRemoteApp" -Value 1 -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "SelectTransport" -Value 1 -ErrorAction SilentlyContinue
 
-          $userExists = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
-          if ($userExists) {
-              Set-LocalUser -Name $username -Password $password
-              Write-Host "Password updated for $username" -ForegroundColor Green
-          } else {
-              New-LocalUser -Name $username -Password $password -FullName "RDP Admin" -PasswordNeverExpires | Out-Null
-              Write-Host "User $username created" -ForegroundColor Green
-          }
-          
-          Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
+        # Tắt Network Level Authentication cho kết nối dễ
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
 
-      - name: Install Software & Gigabit Tools
-        shell: powershell
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Write-Host "Installing Chrome, 7-Zip, Aria2, Rclone, and Git..." -ForegroundColor Green
-          
-          try {
-              choco install 7zip googlechrome aria2 rclone git -y --no-progress --ignore-checksums
-          } catch {
-              Write-Host "Warning: Some packages had minor installation issues, proceeding..." -ForegroundColor Yellow
-          }
-          
-          Add-Content -Path $env:GITHUB_PATH -Value "C:\ProgramData\chocolatey\bin"
-          $env:Path += ";C:\ProgramData\chocolatey\bin"
-          Write-Host "Software packages step completed" -ForegroundColor Green
+        # Giữ kết nối lâu, không tự ngắt
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "MaxIdleTime" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "MaxDisconnectionTime" -Value 0 -Type DWord -ErrorAction SilentlyContinue
 
-      - name: Setup Fast Download Environment on Desktop
-        shell: powershell
-        run: |
-          $desktopPath = "C:\Users\runneradmin\Desktop"
-          if (!(Test-Path $desktopPath)) { New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null }
-          
-          $downloadDir = "$desktopPath\Gigabit_Downloads"
-          if (!(Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null }
-          
-          # Dùng mảng chuỗi ghép dòng để tránh hoàn toàn lỗi cú pháp Here-String trong YAML
-          $lines = @(
-              '@echo off',
-              'title Gigabit Multi-Thread Downloader (Aria2)',
-              'echo ====================================================',
-              'echo   ENIGMANO GIGABIT DOWNLOADER (16 Threads)',
-              'echo ====================================================',
-              'set /p url="Paste direct download URL: "',
-              'if "%url%"=="" exit',
-              'aria2c -x 16 -s 16 -k 1M -d "%USERPROFILE%\Desktop\Gigabit_Downloads" "%url%"',
-              'echo.',
-              'echo Download completed in Desktop\Gigabit_Downloads folder.',
-              'pause'
-          )
-          $ariaScript = $lines -join "`r`n"
-          
-          Set-Content -Path "$desktopPath\Fast_Download.bat" -Value $ariaScript -Encoding ASCII
-          Write-Host "Gigabit download environment ready on Desktop" -ForegroundColor Green
+    # ================= 3. USER + FIREWALL =================
+    - name: Cấu hình User mạnh
+      run: |
+        $pass = ConvertTo-SecureString "P@ssw0rd_MaxRDP_2024!" -AsPlainText -Force
+        Set-LocalUser -Name "runneradmin" -Password $pass
 
-      - name: Install & Authenticate Tailscale
-        shell: powershell
-        env:
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          if ([string]::IsNullOrWhiteSpace("$env:TAILSCALE_AUTH_KEY")) {
-              Write-Host "::error::TAILSCALE_AUTH_KEY secret is missing!"
-              exit 1
-          }
+        # Thêm quyền admin
+        Add-LocalGroupMember -Group "Administrators" -Member "runneradmin" -ErrorAction SilentlyContinue
 
-          Write-Host "Installing Tailscale via Chocolatey..." -ForegroundColor Green
-          choco install tailscale -y --no-progress --ignore-checksums
+        # Tắt UAC (cho phép thao tác thoải mái)
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name "EnableLUA" -Value 0 -ErrorAction SilentlyContinue
 
-          $tsDir = "C:\Program Files\Tailscale"
-          if (Test-Path $tsDir) {
-              Add-Content -Path $env:GITHUB_PATH -Value $tsDir
-              $env:Path += ";$tsDir"
-          }
+        # Mở firewall
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+        netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
 
-          # Vòng lặp chờ Service Tailscale đăng ký thành công vào hệ thống Windows
-          $retrySvc = 0
-          $tsSvc = $null
-          while ($retrySvc -lt 10) {
-              $tsSvc = Get-Service | Where-Object { $_.Name -like "*tailscale*" } -ErrorAction SilentlyContinue
-              if ($tsSvc) { break }
-              $retrySvc++
-              Start-Sleep -Seconds 2
-          }
+    # ================= 4. CÀI TOOL ĐẦY ĐỦ =================
+    - name: Cài bộ tool đầy đủ
+      run: |
+        # Chrome (thường có sẵn)
+        $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+        if (-not (Test-Path $chrome)) { choco install googlechrome -y --no-progress }
 
-          if ($tsSvc -and $tsSvc.Status -ne 'Running') {
-              Start-Service -Name $tsSvc.Name -ErrorAction SilentlyContinue
-              Start-Sleep -Seconds 3
-          }
+        # Tool cần thiết (cài song song để nhanh)
+        choco install 7zip notepadplusplus vscode git python nodejs -y --no-progress
 
-          $tsPath = (Get-Command tailscale.exe -ErrorAction SilentlyContinue).Path
-          if (-not $tsPath) { $tsPath = "$tsDir\tailscale.exe" }
+        # Shortcut Chrome ra Desktop
+        $ws = New-Object -ComObject WScript.Shell
+        $sc = $ws.CreateShortcut("C:\Users\runneradmin\Desktop\Google Chrome.lnk")
+        $sc.TargetPath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+        $sc.Save()
 
-          if (Test-Path $tsPath) {
-              Write-Host "Authenticating Tailscale..." -ForegroundColor Green
-              & $tsPath up --auth-key="$env:TAILSCALE_AUTH_KEY" --accept-routes --hostname="enigmano-rdp" --reset --ephemeral --unattended
-              Write-Host "Tailscale authenticated successfully" -ForegroundColor Green
-          } else {
-              Write-Host "::error::Tailscale executable not found!"
-              exit 1
-          }
+    # ================= 5. TAILSCALE (KẾT NỐI ỔN ĐỊNH) =================
+    - name: Cài Tailscale
+      run: |
+        choco install tailscale -y --no-progress
+        $env:Path += ";C:\Program Files\Tailscale"
 
-      - name: Get Tailscale IP
-        id: get_ip
-        shell: powershell
-        run: |
-          $tsPath = (Get-Command tailscale.exe -ErrorAction SilentlyContinue).Path
-          if (-not $tsPath) { $tsPath = "C:\Program Files\Tailscale\tailscale.exe" }
-          
-          $tailscaleIP = $null
-          $maxRetries = 30
-          $retryCount = 0
+    - name: Kết nối Tailscale
+      env:
+        TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+      run: |
+        # Kết nối Tailscale (IP cố định, không giới hạn giờ)
+        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey $env:TS_AUTHKEY --hostname "gh-rdp-win2022" --accept-routes
 
-          Write-Host "Waiting for Tailscale IP..." -ForegroundColor Green
-          while ($retryCount -lt $maxRetries) {
-              if (Test-Path $tsPath) {
-                  $ip = & $tsPath ip -4 2>$null
-                  if ($ip -and $ip.Trim() -ne "") {
-                      $tailscaleIP = $ip.Trim()
-                      break
-                  }
-              }
-              $retryCount++
-              Start-Sleep -Seconds 2
-          }
+        # Bật subnet router (nếu cần)
+        Start-Sleep -Seconds 10
 
-          if ($tailscaleIP) {
-              Write-Host "Tailscale IP acquired: $tailscaleIP" -ForegroundColor Green
-              Add-Content -Path $env:GITHUB_OUTPUT -Value "ip=$tailscaleIP"
-          } else {
-              Write-Host "::error::Failed to acquire Tailscale IP"
-              exit 1
-          }
+        # Hiện IP Tailscale để kết nối RDP
+        $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+        Write-Host "=========================================" -ForegroundColor Green
+        Write-Host "  RDP qua Tailscale:" -ForegroundColor Yellow
+        Write-Host "  IP   : $ip" -ForegroundColor Cyan
+        Write-Host "  USER : runneradmin" -ForegroundColor Cyan
+        Write-Host "  PASS : P@ssw0rd_MaxRDP_2024!" -ForegroundColor Cyan
+        Write-Host "=========================================" -ForegroundColor Green
 
-      - name: Display Connection Details
-        shell: powershell
-        run: |
-          $durationRaw = "${{ github.event.inputs.duration_minutes }}"
-          $duration = 180
-          if ([int]::TryParse($durationRaw, [ref]$duration)) {
-              if ($duration -lt 1) { $duration = 180 }
-              if ($duration -gt 350) { $duration = 350 }
-          } else {
-              $duration = 180
-          }
-          $endTime = (Get-Date).AddMinutes($duration)
-          
-          Write-Host "`n========================================" -ForegroundColor Cyan
-          Write-Host "   RDP CONNECTION INFORMATION" -ForegroundColor Cyan
-          Write-Host "========================================" -ForegroundColor Cyan
-          Write-Host "IP Address  : ${{ steps.get_ip.outputs.ip }}" -ForegroundColor Yellow
-          Write-Host "Username    : runneradmin" -ForegroundColor Yellow
-          if ([string]::IsNullOrWhiteSpace("$env:GENERATED_RDP_PASSWORD")) {
-              Write-Host "Password    : (Value configured in RDP_PASSWORD secret)" -ForegroundColor Yellow
-          } else {
-              Write-Host "Password    : $env:GENERATED_RDP_PASSWORD" -ForegroundColor Yellow
-          }
-          Write-Host "Hostname    : enigmano-rdp" -ForegroundColor Yellow
-          Write-Host "Session End : $endTime UTC" -ForegroundColor Yellow
-          Write-Host "========================================" -ForegroundColor Cyan
-          Write-Host ""
+    # ================= 6. NGROK (DỰ PHÒNG) =================
+    - name: Tải Ngrok dự phòng
+      run: |
+        Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+        Expand-Archive ngrok.zip
 
-      - name: Keep Session Alive
-        shell: powershell
-        run: |
-          $durationRaw = "${{ github.event.inputs.duration_minutes }}"
-          $durationMinutes = 180
-          if ([int]::TryParse($durationRaw, [ref]$durationMinutes)) {
-              if ($durationMinutes -lt 1) { $durationMinutes = 180 }
-              if ($durationMinutes -gt 350) { $durationMinutes = 350 }
-          } else {
-              $durationMinutes = 180
-          }
-          $endTime = (Get-Date).AddMinutes($durationMinutes)
-          $heartbeatCount = 0
+    # ================= 7. KEEP-ALIVE =================
+    - name: Ngrok + Keep-alive 5h50
+      env:
+        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+      run: |
+        .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
+        Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
 
-          Write-Host "Session keeper started - Running for $durationMinutes minutes..." -ForegroundColor Green
-          
-          while ((Get-Date) -lt $endTime) {
-              $heartbeatCount++
-              $now = Get-Date
-              $timeLeft = [math]::Max(0, [math]::Round(($endTime - $now).TotalMinutes))
-              Write-Host "Heartbeat #$heartbeatCount | Time Remaining: ${timeLeft}m | Timestamp: $($now.ToString('HH:mm:ss')) UTC" -ForegroundColor Green
-              Start-Sleep -Seconds 60
-          }
-          
-          Write-Host "Session expired cleanly." -ForegroundColor Yellow
+        Start-Sleep -Seconds 15
+        try {
+          $info = Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
+          Write-Host "NGROK URL: $($info.tunnels[0].public_url)" -ForegroundColor Yellow
+        } catch {}
+
+        # Keep-alive gần 6h
+        $end = (Get-Date).AddMinutes(350)
+        while ((Get-Date) -lt $end) {
+          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Alive | RAM: $([math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,2))GB free"
+          Start-Sleep -Seconds 60
+        }
