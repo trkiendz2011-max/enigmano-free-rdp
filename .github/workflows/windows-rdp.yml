@@ -1,9 +1,7 @@
-name: Windows Server 2022 MAX CONFIG
+name: Windows Server 2022 RDP (Balanced)
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 */5 * * *'
 
 jobs:
   build:
@@ -11,101 +9,58 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    # ================= 1. TỐI ƯU CPU + RAM =================
-    - name: Tối ưu CPU và RAM
+    # ========== 1. TỐI ƯU VỪA PHẢI ==========
+    - name: Tối ưu hệ thống
       run: |
-        # Tắt toàn bộ dịch vụ ngốn tài nguyên
-        $svc = @(
-          "SysMain","Spooler","DiagTrack","WSearch","MapsBroker",
-          "XblAuthManager","XblGameSave","XboxNetApiSvc","XboxGipSvc",
-          "RetailDemo","PcaSvc","WMPNetworkSvc","Fax","RemoteRegistry",
-          "TabletInputService","WerSvc","TrustedInstaller","wuauserv",
-          "BITS","DoSvc","WpnService","WpnUserService"
-        )
+        # Tắt vài dịch vụ nền không cần thiết (an toàn)
+        $svc = @("SysMain","Spooler","DiagTrack","WSearch")
         foreach ($s in $svc) {
           Set-Service -Name $s -StartupType Disabled -ErrorAction SilentlyContinue
           Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
         }
 
-        # Tắt Windows Defender hoàn toàn (giảm CPU + RAM mạnh)
-        Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-        Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
-        Set-MpPreference -DisableBehaviorMonitoring $true -ErrorAction SilentlyContinue
-        Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
-        Set-MpPreference -DisableArchiveScanning $true -ErrorAction SilentlyContinue
-        Set-MpPreference -DisableIntrusionPreventionSystem $true -ErrorAction SilentlyContinue
-        Set-MpPreference -MAPSReporting 0 -ErrorAction SilentlyContinue
-        Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue
-
-        # Tắt Windows Update hoàn toàn
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name "NoAutoUpdate" -Value 1 -ErrorAction SilentlyContinue
-
-        # Tắt Telemetry
+        # Tắt telemetry (nhẹ, không ảnh hưởng bảo mật)
         Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name "AllowTelemetry" -Value 0 -ErrorAction SilentlyContinue
 
-        # Tắt Cortana
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' -Name "AllowCortana" -Value 0 -ErrorAction SilentlyContinue
-
-        # Tắt hiệu ứng hình ảnh (tăng tốc UI)
+        # Tắt hiệu ứng hình ảnh cho UI mượt hơn
         Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name "VisualFXSetting" -Value 2 -ErrorAction SilentlyContinue
 
         # Tắt transparency
         Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name "EnableTransparency" -Value 0 -ErrorAction SilentlyContinue
 
-    # ================= 2. TỐI ƯU RDP SIÊU MƯỢT =================
-    - name: Tối ưu RDP chuyên sâu
+    # ========== 2. TỐI ƯU RDP ==========
+    - name: Tối ưu RDP
       run: |
         # Bật RDP
         Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-        # Cho phép nhiều session
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Type DWord
-
-        # FPS cao + buffer lớn (60 FPS mượt)
+        # FPS ~60
         Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmFrameInterval" -Value 16 -Type DWord
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmMaxQueuedBuffers" -Value 32 -Type DWord
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmMaxPendingFrames" -Value 16 -Type DWord
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmMaxQueuedBuffers" -Value 16 -Type DWord
 
-        # Băng thông RDP tối đa
+        # Ưu tiên băng thông RDP
         Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TermDD' -Name "FlowControlDisable" -Value 1 -Type DWord
 
-        # Cho phép RemoteFX (GPU acceleration)
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fEnableRemoteFXAdvancedRemoteApp" -Value 1 -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "SelectTransport" -Value 1 -ErrorAction SilentlyContinue
-
-        # Tắt Network Level Authentication cho kết nối dễ
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-
-        # Giữ kết nối lâu, không tự ngắt
+        # Không tự ngắt session
         Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "MaxIdleTime" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "MaxDisconnectionTime" -Value 0 -Type DWord -ErrorAction SilentlyContinue
 
-    # ================= 3. USER + FIREWALL =================
-    - name: Cấu hình User mạnh
+    # ========== 3. USER + FIREWALL ==========
+    - name: Cấu hình User
       run: |
-        $pass = ConvertTo-SecureString "P@ssw0rd_MaxRDP_2024!" -AsPlainText -Force
+        $pass = ConvertTo-SecureString "P@ssw0rd_RDP_2024!" -AsPlainText -Force
         Set-LocalUser -Name "runneradmin" -Password $pass
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-        # Thêm quyền admin
-        Add-LocalGroupMember -Group "Administrators" -Member "runneradmin" -ErrorAction SilentlyContinue
-
-        # Tắt UAC (cho phép thao tác thoải mái)
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name "EnableLUA" -Value 0 -ErrorAction SilentlyContinue
-
-        # Mở firewall
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-        netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-
-    # ================= 4. CÀI TOOL ĐẦY ĐỦ =================
-    - name: Cài bộ tool đầy đủ
+    # ========== 4. CHROME ==========
+    - name: Kiểm tra Chrome
       run: |
-        # Chrome (thường có sẵn)
         $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-        if (-not (Test-Path $chrome)) { choco install googlechrome -y --no-progress }
-
-        # Tool cần thiết (cài song song để nhanh)
-        choco install 7zip notepadplusplus vscode git python nodejs -y --no-progress
+        if (Test-Path $chrome) {
+          Write-Host "Chrome OK:"; & $chrome --version
+        } else {
+          choco install googlechrome -y --no-progress
+        }
 
         # Shortcut Chrome ra Desktop
         $ws = New-Object -ComObject WScript.Shell
@@ -113,54 +68,29 @@ jobs:
         $sc.TargetPath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
         $sc.Save()
 
-    # ================= 5. TAILSCALE (KẾT NỐI ỔN ĐỊNH) =================
-    - name: Cài Tailscale
-      run: |
-        choco install tailscale -y --no-progress
-        $env:Path += ";C:\Program Files\Tailscale"
-
-    - name: Kết nối Tailscale
-      env:
-        TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
-      run: |
-        # Kết nối Tailscale (IP cố định, không giới hạn giờ)
-        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey $env:TS_AUTHKEY --hostname "gh-rdp-win2022" --accept-routes
-
-        # Bật subnet router (nếu cần)
-        Start-Sleep -Seconds 10
-
-        # Hiện IP Tailscale để kết nối RDP
-        $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
-        Write-Host "=========================================" -ForegroundColor Green
-        Write-Host "  RDP qua Tailscale:" -ForegroundColor Yellow
-        Write-Host "  IP   : $ip" -ForegroundColor Cyan
-        Write-Host "  USER : runneradmin" -ForegroundColor Cyan
-        Write-Host "  PASS : P@ssw0rd_MaxRDP_2024!" -ForegroundColor Cyan
-        Write-Host "=========================================" -ForegroundColor Green
-
-    # ================= 6. NGROK (DỰ PHÒNG) =================
-    - name: Tải Ngrok dự phòng
-      run: |
-        Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-        Expand-Archive ngrok.zip
-
-    # ================= 7. KEEP-ALIVE =================
-    - name: Ngrok + Keep-alive 5h50
+    # ========== 5. NGROK ==========
+    - name: Chạy Ngrok
       env:
         NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
       run: |
+        Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+        Expand-Archive ngrok.zip
         .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
         Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
 
         Start-Sleep -Seconds 15
         try {
           $info = Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
-          Write-Host "NGROK URL: $($info.tunnels[0].public_url)" -ForegroundColor Yellow
-        } catch {}
+          Write-Host "=====================================" -ForegroundColor Green
+          Write-Host " RDP : $($info.tunnels[0].public_url)" -ForegroundColor Yellow
+          Write-Host " USER: runneradmin" -ForegroundColor Yellow
+          Write-Host " PASS: P@ssw0rd_RDP_2024!" -ForegroundColor Yellow
+          Write-Host "=====================================" -ForegroundColor Green
+        } catch { Write-Host "Xem log ngrok ở trên" }
 
-        # Keep-alive gần 6h
+        # Keep-alive 5h50
         $end = (Get-Date).AddMinutes(350)
         while ((Get-Date) -lt $end) {
-          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Alive | RAM: $([math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,2))GB free"
+          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Session alive..."
           Start-Sleep -Seconds 60
         }
