@@ -11,6 +11,16 @@ on:
         options:
           - windows-2022
           - windows-2025
+      discord_token:
+        description: 'Dán Discord Bot Token vào đây'
+        required: true
+        default: ''
+        type: string
+      discord_channel:
+        description: 'Dán ID Kênh (Channel ID) Discord vào đây'
+        required: true
+        default: ''
+        type: string
 
 jobs:
   rdp:
@@ -80,15 +90,15 @@ jobs:
 
       - name: 7. Lấy IP Tailscale và Gửi thông tin qua Discord Bot
         env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          INPUT_TOKEN: ${{ inputs.discord_token }}
+          INPUT_CHANNEL: ${{ inputs.discord_channel }}
           OS_NAME: ${{ inputs.os_version }}
         run: |
           $tsIp = (tailscale ip -4)
           $connectionString = "$tsIp:3389"
           $password = "RDP@Password2026!"
           
-          if ("${{ env.DISCORD_BOT_TOKEN }}" -ne "" -and "${{ env.DISCORD_CHANNEL_ID }}" -ne "") {
+          if ("${{ env.INPUT_TOKEN }}" -ne "" -and "${{ env.INPUT_CHANNEL }}" -ne "") {
               Write-Host "Đang gửi thông tin menu máy ảo qua Discord Bot..."
               
               $ipFormatted = '`' + $connectionString + '`'
@@ -115,20 +125,20 @@ jobs:
               } | ConvertTo-Json -Depth 5
 
               $headers = @{
-                  "Authorization" = "Bot ${{ env.DISCORD_BOT_TOKEN }}"
+                  "Authorization" = "Bot ${{ env.INPUT_TOKEN }}"
                   "Content-Type"  = "application/json"
               }
 
-              $discordUrl = "https://discord.com/api/v10/channels/${{ env.DISCORD_CHANNEL_ID }}/messages"
+              $discordUrl = "https://discord.com/api/v10/channels/${{ env.INPUT_CHANNEL }}/messages"
               
               try {
                   Invoke-RestMethod -Uri $discordUrl -Method Post -Headers $headers -Body$body
                   Write-Host "Gửi thông tin qua Discord thành công!"
               } catch {
-                  Write-Warning "Không thể gửi tin nhắn Discord. Hãy kiểm tra lại Bot Token và Channel ID!"
+                  Write-Warning "Không thể gửi tin nhắn Discord. Hãy kiểm tra lại Bot Token và ID Kênh!"
               }
           } else {
-              Write-Warning "Chưa cấu hình Discord Secrets, bỏ qua bước gửi tin nhắn."
+              Write-Warning "Chưa nhập Token hoặc ID Kênh Discord, bỏ qua bước gửi tin nhắn."
           }
 
           Write-Host "============================================================"
