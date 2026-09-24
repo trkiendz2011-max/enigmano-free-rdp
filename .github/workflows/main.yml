@@ -1,4 +1,4 @@
-name: Windows RDP with Tailscale, Audio & Discord Bot
+name: Windows RDP with Tailscale, Audio & Discord Bot (Fixed)
 
 on:
   workflow_dispatch:
@@ -126,50 +126,61 @@ jobs:
           OS_NAME: ${{ inputs.os_version }}
         run: |
           try {
-              Write-Host "Đang lấy địa chỉ IP từ Tailscale..."
+              Write-Host "Đang chờ Tailscale cấp phát IP..."
               $tailscalePath = "C:\Program Files\Tailscale"
-              $tsIp = & "$tailscalePath\tailscale.exe" ip -4
-              if (-not $tsIp) {
-                  throw "Không thể trích xuất IP Tailscale."
+              $tsIp =$null
+              
+              # Thử lại 5 lần (mỗi lần cách nhau 3 giây) để đợi mạng ổn định
+              for ($i = 1; $i -le 5; $i++) {$tsIp = & "$tailscalePath\tailscale.exe" ip -4 2>$null
+                  if ($tsIp) { break }
+                  Write-Host "Đang thử lại lấy IP lần $i..."
+                  Start-Sleep -Seconds 3
               }
+
+              if (-not $tsIp) {
+                  throw "Không thể trích xuất IP Tailscale. Hãy kiểm tra lại Tailscale AuthKey!"
+              }
+              
               $connectionString = "$tsIp:3389"
               $password = "RDP@Password2026!"
               
               if ("${{ env.INPUT_TOKEN }}" -ne "" -and "${{ env.INPUT_CHANNEL }}" -ne "") {
-                  Write-Host "Đang gửi thông tin menu máy ảo qua Discord Bot..."
-                  
-                  $ipFormatted = '`' + $connectionString + '`'
-                  $userFormatted = '`runneradmin`'
-                  $passFormatted = '`' + $password + '`'
+                  try {
+                      Write-Host "Đang gửi thông tin menu máy ảo qua Discord Bot..."
+                      $ipFormatted = '`' + $connectionString + '`'
+                      $userFormatted = '`runneradmin`'
+                      $passFormatted = '`' + $password + '`'
 
-                  $body = @{
-                      embeds = @(
-                          @{
-                              title = "🖥️ GitHub Windows RDP - Trạng Thái Hoạt Động"
-                              description = "Máy ảo RDP của anh **TrKiên (Kiendz)** đã sẵn sàng sử dụng!"
-                              color = 3066993
-                              fields = @(
-                                  @{ name = "💻 Hệ điều hành"; value = "$env:OS_NAME"; inline = $true },
-                                  @{ name = "👤 Chủ sở hữu"; value = "TrKiên"; inline = $true },
-                                  @{ name = "🌐 Địa chỉ IP (Tailscale)"; value = $ipFormatted; inline =$false },
-                                  @{ name = "🔑 Tài khoản"; value = $userFormatted; inline =$true },
-                                  @{ name = "🔒 Mật khẩu"; value = $passFormatted; inline =$true },
-                                  @{ name = "🔊 Âm thanh & Micro"; value = "Đã kích hoạt hoạt động mượt mà"; inline = $false }
-                              )
-                              footer = @{ text = "Tailscale Secure P2P • Tối ưu hóa không giật lag" }
-                          }
-                      )
-                  } | ConvertTo-Json -Depth 5
+                      $body = @{
+                          embeds = @(
+                              @{
+                                  title = "🖥️ GitHub Windows RDP - Trạng Thái Hoạt Động"
+                                  description = "Máy ảo RDP của anh **TrKiên (Kiendz)** đã sẵn sàng sử dụng!"
+                                  color = 3066993
+                                  fields = @(
+                                      @{ name = "💻 Hệ điều hành"; value = "$env:OS_NAME"; inline = $true },
+                                      @{ name = "👤 Chủ sở hữu"; value = "TrKiên"; inline = $true },
+                                      @{ name = "🌐 Địa chỉ IP (Tailscale)"; value = $ipFormatted; inline =$false },
+                                      @{ name = "🔑 Tài khoản"; value = $userFormatted; inline =$true },
+                                      @{ name = "🔒 Mật khẩu"; value = $passFormatted; inline =$true },
+                                      @{ name = "🔊 Âm thanh & Micro"; value = "Đã kích hoạt hoạt động mượt mà"; inline = $false }
+                                  )
+                                  footer = @{ text = "Tailscale Secure P2P • Tối ưu hóa không giật lag" }
+                              }
+                          )
+                      } | ConvertTo-Json -Depth 5
 
-                  $headers = @{
-                      "Authorization" = "Bot ${{ env.INPUT_TOKEN }}"
-                      "Content-Type"  = "application/json"
+                      $headers = @{
+                          "Authorization" = "Bot ${{ env.INPUT_TOKEN }}"
+                          "Content-Type"  = "application/json"
+                      }
+
+                      $discordUrl = "https://discord.com/api/v10/channels/${{ env.INPUT_CHANNEL }}/messages"
+                      Invoke-RestMethod -Uri $discordUrl -Method Post -Headers $headers -Body$body -ErrorAction Stop
+                      Write-Host "✅ Gửi thông tin qua Discord thành công!" -ForegroundColor Green
+                  } catch {
+                      Write-Warning "⚠️ Không gửi được tin nhắn Discord (Kiểm tra Token hoặc ID Kênh): $_"
                   }
-
-                  $discordUrl = "https://discord.com/api/v10/channels/${{ env.INPUT_CHANNEL }}/messages"
-                  
-                  Invoke-RestMethod -Uri $discordUrl -Method Post -Headers $headers -Body$body -ErrorAction Stop
-                  Write-Host "✅ Gửi thông tin qua Discord thành công!" -ForegroundColor Green
               } else {
                   Write-Warning "⚠️ Chưa nhập Token hoặc ID Kênh Discord, bỏ qua bước gửi tin nhắn."
               }
@@ -179,7 +190,8 @@ jobs:
               Write-Host " Địa chỉ IP kết nối (RDP) -> $connectionString" -ForegroundColor Yellow
               Write-Host "============================================================"
           } catch {
-              Write-Error "❌ LỖI Ở BƯỚC DISCORD/TAILSCALE: $_"
+              Write-Error "❌ LỖI Ở BƯỚC 7: $_"
+              exit 1
           }
         shell: powershell
 
