@@ -1,4 +1,4 @@
-name: Windows RDP with Tailscale, Audio & Discord Bot (Fixed)
+name: Windows RDP with Tailscale, Audio & Discord Bot
 
 on:
   workflow_dispatch:
@@ -92,22 +92,15 @@ jobs:
           }
         shell: powershell
 
-      - name: 5. Tải và cài đặt hình nền từ Google Drive
+      - name: 5. Tải và cài đặt hình nền tối ưu
         run: |
           $fileId = "11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL"
           $wallpaperUrl = "https://drive.google.com/uc?export=download&id=$fileId"
           $outputPath = "$env:TEMP\wallpaper.jpg"
           try {
               Invoke-WebRequest -Uri $wallpaperUrl -OutFile$outputPath -ErrorAction Stop
-              Add-Type -TypeDefinition @"
-              using System;
-              using System.Runtime.InteropServices;
-              public class Wallpaper {
-                  [DllImport("user32.dll", CharSet = CharSet.Auto)]
-                  public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-              }
-"@
-              [Wallpaper]::SystemParametersInfo(20, 0, $outputPath, 3)
+              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $outputPath
+              rundll32.exe user32.dll, UpdatePerUserSystemParameters
               Write-Host "✅ Đã áp dụng hình nền thành công!" -ForegroundColor Green
           } catch {
               Write-Warning "⚠️ Không tải được hình nền từ Google Drive. Dùng giao diện mặc định."
