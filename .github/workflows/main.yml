@@ -1,4 +1,4 @@
-name: Windows RDP Ultimate Fix
+name: Windows RDP Clean Stable
 
 on:
   workflow_dispatch:
@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    - name: 1. Setup RDP, Password, Audio & Wallpaper
+    - name: 1. Setup RDP, Password & Audio
       shell: powershell
       run: |
         Write-Host "=== 1. Configuring Remote Desktop ==="
@@ -43,7 +43,7 @@ jobs:
         Write-Host "=== 2. Setting Administrator Password ==="
         $pwd = "${{ github.event.inputs.rdp_password }}"
         try {
-            net user administrator "$pwd" 2>&1 | Out-Null
+            net user Administrator "$pwd" 2>&1 | Out-Null
             Write-Host "-> Administrator password updated successfully."
         } catch {
             Write-Host "-> Notice on password update: $_"
@@ -58,29 +58,6 @@ jobs:
             } catch {
                 Write-Host "-> Could not start $svc (non-critical)."
             }
-        }
-
-        Write-Host "=== 4. Applying Custom Wallpaper ==="
-        try {
-            New-Item -ItemType Directory -Force -Path "C:\Workspace" -ErrorAction SilentlyContinue | Out-Null
-            $imageUrl = "https://lh3.googleusercontent.com/d/11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL=s0"
-            $imagePath = "C:\Workspace\wallpaper.jpg"
-            Invoke-WebRequest -Uri $imageUrl -OutFile $imagePath -ErrorAction SilentlyContinue
-            
-            if (Test-Path $imagePath) {
-                Add-Type -TypeDefinition @"
-                using System;
-                using System.Runtime.InteropServices;
-                public class WallpaperSetter {
-                    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-                    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-                }
-"@ -ErrorAction SilentlyContinue
-                [WallpaperSetter]::SystemParametersInfo(20, 0, $imagePath, 3) | Out-Null
-                Write-Host "-> Wallpaper applied successfully!"
-            }
-        } catch {
-            Write-Host "-> Wallpaper application skipped: $_"
         }
         Write-Host "Setup completed successfully!"
 
@@ -103,7 +80,7 @@ jobs:
         $rdpPass = "${{ github.event.inputs.rdp_password }}"
         $channelId = "${{ github.event.inputs.discord_channel_id }}"
         $botToken = "${{ github.event.inputs.discord_token }}"
-        $userCode = '`administrator`'
+        $userCode = '`Administrator`'
 
         $content = "🚀 **CLOUDTRKIEN RDP STARTED!**`n" +
                    "----------------------------------------------`n" +
@@ -111,7 +88,6 @@ jobs:
                    "👤 **User:** $userCode`n" +
                    "🔑 **Pass:** $rdpPass`n" +
                    "🔊 **Audio/Mic:** Enabled`n" +
-                   "🖼️ **Wallpaper:** Loaded`n" +
                    "⚡ **Status:** Stable & Ready!"
 
         $body = @{ content = $content } \vert{} ConvertTo-Json$headers = @{
