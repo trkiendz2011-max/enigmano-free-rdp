@@ -110,14 +110,9 @@ jobs:
               Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -ErrorAction Stop
               if ((Get-Item $out).Length -lt 10240) { throw "File tải về không phải ảnh hợp lệ" }
 
-              Add-Type -TypeDefinition @"
-              using System.Runtime.InteropServices;
-              public class Wallpaper {
-                  [DllImport("user32.dll", CharSet = CharSet.Auto)]
-                  public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-              }
-"@
-              [Wallpaper]::SystemParametersInfo(20, 0, $out, 3) | Out-Null
+              $sig = '[DllImport("user32.dll", CharSet = CharSet.Auto)] public static extern int SystemParametersInfo(int a, int b, string c, int d);'
+              Add-Type -MemberDefinition $sig -Name Native -Namespace Wall
+              [Wall.Native]::SystemParametersInfo(20, 0, $out, 3) | Out-Null
               Write-Host "✅ Đã áp dụng hình nền!" -ForegroundColor Green
           } catch {
               Write-Warning "⚠️ Không đặt được hình nền, dùng mặc định: $_"
