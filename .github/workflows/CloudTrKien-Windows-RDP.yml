@@ -1,0 +1,218 @@
+name: CloudTrKien Windows RDP
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_os:
+        description: "Chọn phiên bản Windows runner"
+        required: true
+        default: "windows-2022"
+        type: choice
+        options:
+          - windows-2022
+          - windows-latest
+
+      discord_channel_id:
+        description: "Discord Channel ID để nhận thông báo"
+        required: true
+        default: "1413508445323133001"
+        type: string
+
+jobs:
+  rdp-runner:
+    runs-on: ${{ inputs.runner_os }}
+    timeout-minutes: 360
+
+    steps:
+
+      - name: Setup Windows RDP
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          Write-Host "=== Configuring Remote Desktop ==="
+
+          Set-ItemProperty `
+            -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" `
+            -Value 0
+
+          Set-ItemProperty `
+            -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name "UserAuthentication" `
+            -Value 1
+
+          Enable-NetFirewallRule `
+            -DisplayGroup "Remote Desktop" `
+            -ErrorAction SilentlyContinue
+
+          Write-Host "RDP configuration completed."
+
+          Write-Host "=== Configuring Administrator ==="
+
+          $admin = Get-LocalUser `
+            -Name "Administrator" `
+            -ErrorAction SilentlyContinue
+
+          if ($null -ne $admin) {
+              Enable-LocalUser -Name "Administrator"
+
+              if (-not [string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
+                  $securePassword = ConvertTo-SecureString `
+                    $env:RDP_PASSWORD `
+                    -AsPlainText `
+                    -Force
+
+                  Set-LocalUser `
+                    -Name "Administrator" `
+                    -Password $securePassword
+
+                  Write-Host "Administrator password configured."
+              }
+              else {
+                  Write-Warning "RDP_PASSWORD secret is empty."
+              }
+          }
+          else {
+              Write-Warning "Administrator account was not found."
+          }
+
+          Write-Host "=== Configuring Audio ==="
+
+          foreach ($serviceName in @(
+              "AudioEndpointBuilder",
+              "Audiosrv"
+          )) {
+              try {
+                  Set-Service `
+                    -Name $serviceName `
+                    -StartupType Automatic `
+                    -ErrorAction Stop
+
+                  Start-Service `
+                    -Name $serviceName `
+                    -ErrorAction SilentlyContinue
+
+                  Write-Host "$serviceName configured."
+              }
+              catch {
+                  Write-Warning "$serviceName: $($_.Exception.Message)"
+              }
+          }
+
+          Write-Host "=== Creating Workspace ==="
+
+          New-Item `
+            -ItemType Directory `
+            -Path "C:\Workspace" `
+            -Force | Out-Null
+
+          Write-Host "Windows setup completed."
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Verify Tailscale
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tailscale)) {
+              throw "Tailscale executable was not found."
+          }
+
+          Write-Host "=== Tailscale Status ==="
+
+          & $tailscale status
+
+          Write-Host ""
+          Write-Host "=== Tailscale IPv4 ==="
+
+          $tsIP = (& $tailscale ip -4 2>$null).Trim()
+
+          if ([string]::IsNullOrWhiteSpace($tsIP)) {
+              throw "Unable to obtain Tailscale IPv4 address."
+          }
+
+          Write-Host "Tailscale IPv4: $tsIP"
+
+      - name: Send Discord Notification
+        shell: powershell
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ inputs.discord_channel_id }}
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tailscale)) {
+              throw "Tailscale executable was not found."
+          }
+
+          $tsIP = (& $tailscale ip -4 2>$null).Trim()
+
+          if ([string]::IsNullOrWhiteSpace($tsIP)) {
+              $tsIP = "Unknown"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:DISCORD_TOKEN)) {
+              throw "DISCORD_TOKEN secret is missing."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:DISCORD_CHANNEL_ID)) {
+              throw "Discord channel ID is missing."
+          }
+
+          $content = @"
+🚀 **CLOUDTRKIEN RDP STARTED!**
+
+━━━━━━━━━━━━━━━━━━━━
+
+📍 **IP:** ``$tsIP``
+👤 **User:** `Administrator`
+🔑 **Pass:** `$env:RDP_PASSWORD`
+🔊 **Audio:** Enabled
+⚡ **Status:** Ready
+
+━━━━━━━━━━━━━━━━━━━━
+"@
+
+          $payload = @{
+              content = $content
+          } | ConvertTo-Json -Depth 5
+
+          $headers = @{
+              Authorization = "Bot $env:DISCORD_TOKEN"
+              "Content-Type" = "application/json"
+          }
+
+          $uri = "https://discord.com/api/v10/channels/$env:DISCORD_CHANNEL_ID/messages"
+
+          Invoke-RestMethod `
+            -Uri $uri `
+            -Method Post `
+            -Headers $headers `
+            -Body $payload `
+            -ErrorAction Stop
+
+          Write-Host "Discord notification sent."
+
+      - name: Keep Runner Alive
+        shell: powershell
+        run: |
+          Write-Host "===================================="
+          Write-Host " CloudTrKien RDP runner is active"
+          Write-Host "===================================="
+
+          while ($true) {
+              Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Runner alive..."
+              Start-Sleep -Seconds 30
+          }
