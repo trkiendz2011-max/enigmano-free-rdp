@@ -1,4 +1,4 @@
-name: Windows RDP Full Options
+name: Windows RDP Stable
 
 on:
   workflow_dispatch:
@@ -27,15 +27,15 @@ on:
         default: 'KienDz@2026'
 
 jobs:
-  full-options-rdp:
+  rdp-runner:
     runs-on: ${{ github.event.inputs.runner_os }}
     timeout-minutes: 360
 
     steps:
-    - name: 1. Setup and Optimize System
+    - name: 1. Setup RDP and Audio
       shell: powershell
       run: |
-        # Mở RDP và cấu hình tường lửa
+        # Mở Remote Desktop và cấu hình tường lửa
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
@@ -44,91 +44,22 @@ jobs:
         $pass = "${{ github.event.inputs.rdp_password }}"
         net user administrator $pass
         
-        # Bật dịch vụ âm thanh (Micro/Audio)
+        # Bật dịch vụ âm thanh (Audio/Microphone)
         Set-Service -Name Audiosrv -StartupType Automatic
         Start-Service -Name Audiosrv
         Set-Service -Name AudioEndpointBuilder -StartupType Automatic
         Start-Service -Name AudioEndpointBuilder
         
-        # Chuyển Power Plan sang High Performance
-        powercfg -s 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
-        
-        # Tắt hiệu ứng đồ họa nặng để tăng tốc độ RDP
-        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "UserPreferencesMask" -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name "MinAnimate" -Value 0 -ErrorAction SilentlyContinue
+        Write-Host "Cau hinh RDP va Audio thanh cong!"
 
-        # Tối ưu hóa hiệu năng phần cứng ngầm
-        Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-        Stop-Service wuauserv -ErrorAction SilentlyContinue
-        Set-Service wuauserv -StartupType Disabled -ErrorAction SilentlyContinue
-        Stop-Service SysMain -ErrorAction SilentlyContinue
-        Set-Service SysMain -StartupType Disabled -ErrorAction SilentlyContinue
-        Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "C:\Users\Administrator\AppData\Local\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
-        
-        # Tạo thư mục làm việc chung
-        New-Item -ItemType Directory -Force -Path "C:\Workspace"
-        
-        # Tạo Script Backup nhanh trên Desktop
-        $backupScript = @'
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $backupDir = "C:\Users\Administrator\Desktop\Backup"
-        New-Item -ItemType Directory -Force -Path $backupDir
-        $zipFile = "$backupDir\$timestamp.zip"
-        Compress-Archive -Path "C:\Workspace\*" -DestinationPath $zipFile -Force
-        Write-Host "Backup completed at: $zipFile"
-        Start-Process "explorer.exe" $backupDir
-        Read-Host "Press Enter to exit..."
-'@
-        Set-Content -Path "C:\Users\Administrator\Desktop\Nen_Va_Backup.ps1" -Value $backupScript
-
-        # Tự động tải hình nền từ Google Drive và áp dụng
-        try {
-            $imageUrl = "https://lh3.googleusercontent.com/d/11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL=s0"
-            $imagePath = "C:\Workspace\wallpaper.jpg"
-            Invoke-WebRequest -Uri $imageUrl -OutFile $imagePath
-            
-            Add-Type -TypeDefinition @"
-            using System;
-            using System.Runtime.InteropServices;
-            public class Wallpaper {
-                [DllImport("user32.dll", CharSet = CharSet.Auto)]
-                public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-            }
-"@
-            [Wallpaper]::SystemParametersInfo(20, 0, $imagePath, 3)
-        } catch {}
-
-        # Tạo Menu kiểm tra trạng thái hệ thống
-        $menuScript = @'
-        while ($true) {
-            Clear-Host
-            Write-Host "=== RDP STATUS MENU ===" -ForegroundColor Cyan
-            $cpu = (Get-CimInstance Win32_Processor).Name
-            $os = Get-CimInstance Win32_OperatingSystem
-            $freeRAM = "{0:N2} GB" -f ($os.FreePhysicalMemory / 1MB)
-            $totalRAM = "{0:N2} GB" -f ($os.TotalVisibleMemorySize / 1MB)
-            $disk = Get-PSDrive C
-            $freeDisk = "{0:N2} GB" -f ($disk.Free / 1GB)
-            Write-Host "CPU: $cpu" -ForegroundColor Green
-            Write-Host "RAM: $freeRAM / $totalRAM" -ForegroundColor Green
-            Write-Host "Disk C: $freeDisk free" -ForegroundColor Green
-            Write-Host "-----------------------" -ForegroundColor Cyan
-            & "$env:ProgramFiles\Tailscale\tailscale.exe" status
-            Write-Host "=======================" -ForegroundColor Cyan
-            Read-Host "Press Enter to refresh..."
-        }
-'@
-        Set-Content -Path "C:\Users\Administrator\Desktop\Menu_Kiem_Tra.ps1" -Value $menuScript
-
-    - name: 2. Tailscale Setup
+    - name: 2. Tailscale Setup (Host: cloudtrkien)
       uses: tailscale/github-action@v3
       with:
         authkey: ${{ github.event.inputs.tailscale_authkey }}
         hostname: cloudtrkien
         args: --advertise-exit-node=false
 
-    - name: 3. Discord Notification
+    - name: 3. Send Notification to Discord
       shell: powershell
       run: |
         Start-Sleep -Seconds 5
@@ -140,7 +71,7 @@ jobs:
                "📍 **IP:** $tsIP`n" +
                "👤 **User:** $uCode`n" +
                "🔑 **Pass:** ${{ github.event.inputs.rdp_password }}`n" +
-               "🖼️ **Wallpaper:** Loaded from Google Drive!"
+               "⚡ **Status:** Stable & Ready!"
         
         $headers = @{
             "Authorization" = "Bot ${{ github.event.inputs.discord_token }}"
@@ -157,6 +88,7 @@ jobs:
     - name: 4. Keep Alive
       shell: powershell
       run: |
+        Write-Host "May ao dang chay on dinh..."
         while ($true) {
             Start-Sleep -Seconds 30
         }
