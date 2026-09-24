@@ -29,7 +29,9 @@ jobs:
           if (-not $visible) { $visible = '(không có secret nào)' }
           Write-Host "Secret mà run này nhìn thấy: $visible"
 
-          $missing = @('TAILSCALE_AUTHKEY', 'RDP_PASSWORD') | Where-Object { $names -notcontains $_ }
+          $missing = @()
+          if (($names -notcontains 'TAILSCALE_AUTH_KEY') -and ($names -notcontains 'TAILSCALE_AUTHKEY')) { $missing += 'TAILSCALE_AUTH_KEY' }
+          if ($names -notcontains 'RDP_PASSWORD') { $missing += 'RDP_PASSWORD' }
           if ($missing) {
               Write-Host "::error title=Thiếu secret::Thiếu: $($missing -join ', '). Run này chỉ thấy: $visible. Tạo đúng tên ở Settings > Secrets and variables > Actions > Repository secrets (không phải tab Dependabot hay Codespaces)."
               exit 1
@@ -39,11 +41,11 @@ jobs:
       - name: 1. Cài đặt và kết nối Tailscale VPN
         shell: pwsh
         env:
-          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY || secrets.TAILSCALE_AUTHKEY }}
         run: |
           $ErrorActionPreference = "Continue"
           if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
-              Write-Host "::error title=Thiếu secret::Chưa có secret TAILSCALE_AUTHKEY trong Repository secrets của repo này."
+              Write-Host "::error title=Thiếu secret::Chưa có secret TAILSCALE_AUTH_KEY trong Repository secrets của repo này."
               exit 1
           }
 
@@ -202,4 +204,3 @@ jobs:
         run: |
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           if (Test-Path $ts) { & $ts logout 2>$null }
-
