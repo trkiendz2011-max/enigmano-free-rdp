@@ -18,8 +18,26 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: 0. Kiểm tra secrets
+        shell: pwsh
+        env:
+          ALL_SECRETS: ${{ toJSON(secrets) }}
+        run: |
+          $names = @()
+          try { $names = @(($env:ALL_SECRETS | ConvertFrom-Json).PSObject.Properties.Name) } catch { }
+          $visible = ($names | Where-Object { $_ -ne 'github_token' }) -join ', '
+          if (-not $visible) { $visible = '(không có secret nào)' }
+          Write-Host "Secret mà run này nhìn thấy: $visible"
+
+          $missing = @('TAILSCALE_AUTHKEY', 'RDP_PASSWORD') | Where-Object { $names -notcontains $_ }
+          if ($missing) {
+              Write-Host "::error title=Thiếu secret::Thiếu: $($missing -join ', '). Run này chỉ thấy: $visible. Tạo đúng tên ở Settings > Secrets and variables > Actions > Repository secrets (không phải tab Dependabot hay Codespaces)."
+              exit 1
+          }
+          Write-Host "✅ Đủ secret cần thiết."
+
       - name: 1. Cài đặt và kết nối Tailscale VPN
-        shell: powershell
+        shell: pwsh
         env:
           TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
@@ -67,7 +85,7 @@ jobs:
           Write-Host "✅ Tailscale đã kết nối!" -ForegroundColor Green
 
       - name: 2. Kích hoạt Remote Desktop và Firewall
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
@@ -83,7 +101,7 @@ jobs:
           Write-Host "✅ Đã bật RDP!" -ForegroundColor Green
 
       - name: 3. Bật dịch vụ Âm thanh và Micro
-        shell: powershell
+        shell: pwsh
         run: |
           try {
               Set-Service -Name Audiosrv -StartupType Automatic
@@ -101,7 +119,7 @@ jobs:
           }
 
       - name: 4. Thiết lập tài khoản quản trị viên
-        shell: powershell
+        shell: pwsh
         env:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
@@ -116,11 +134,11 @@ jobs:
               Write-Host "::error title=net user::Đặt mật khẩu thất bại: $netResult (mật khẩu cần đủ độ phức tạp)"
               exit 1
           }
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
+          net localgroup "Remote Desktop Users" runneradmin /add 2>&1 | Out-Null
           Write-Host "✅ Đã cấu hình tài khoản runneradmin!" -ForegroundColor Green
 
       - name: 5. Tải hình nền
-        shell: powershell
+        shell: pwsh
         run: |
           $fileId = "11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL"
           $url = "https://drive.google.com/uc?export=download&id=$fileId"
@@ -138,7 +156,7 @@ jobs:
           }
 
       - name: 6. Tối ưu hiệu năng
-        shell: powershell
+        shell: pwsh
         run: |
           try {
               Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Type Binary -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
@@ -150,7 +168,7 @@ jobs:
           }
 
       - name: 7. Hiển thị thông tin kết nối RDP
-        shell: powershell
+        shell: pwsh
         run: |
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           $ip = $null
@@ -171,7 +189,7 @@ jobs:
           Write-Host "============================================================" -ForegroundColor Cyan
 
       - name: 8. Duy trì phiên hoạt động
-        shell: powershell
+        shell: pwsh
         run: |
           Write-Host "Máy ảo đang duy trì hoạt động..."
           for ($i = 1; $i -le 340; $i++) {
@@ -180,7 +198,8 @@ jobs:
 
       - name: 9. Dọn dẹp Tailscale
         if: always()
-        shell: powershell
+        shell: pwsh
         run: |
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           if (Test-Path $ts) { & $ts logout 2>$null }
+
