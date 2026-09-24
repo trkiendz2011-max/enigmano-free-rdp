@@ -1,16 +1,8 @@
-name: Windows RDP Stable Final
+name: Windows RDP Minimal Stable
 
 on:
   workflow_dispatch:
     inputs:
-      runner_os:
-        description: 'Choose OS Version'
-        required: true
-        default: 'windows-2022'
-        type: choice
-        options:
-          - windows-2022
-          - windows-latest
       tailscale_authkey:
         description: 'Tailscale Auth Key'
         required: true
@@ -22,79 +14,131 @@ on:
         description: 'Discord Bot Token'
         required: true
       rdp_password:
-        description: 'Administrator Password'
+        description: 'RDP Password'
         required: true
         default: 'KienDz@2026'
 
 jobs:
   rdp-runner:
-    runs-on: ${{ github.event.inputs.runner_os }}
+    runs-on: windows-2022
     timeout-minutes: 360
 
     steps:
-    - name: 1. Setup RDP and System
-      shell: powershell
-      run: |
-        # Mở Remote Desktop và tường lửa
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+      - name: 1. Setup System & User
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ inputs.rdp_password }}
+        run: |
+          # --- Bật Remote Desktop (giữ NLA) + cho phép mic qua RDP ---
+          function Set-Reg($path, $name, $value) {
+              if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+              Set-ItemProperty -Path $path -Name $name -Value $value -Type DWord
+          }
+          $tsKey  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
+          $rdpKey = "$tsKey\WinStations\RDP-Tcp"
+          Set-Reg $tsKey  'fDenyTSConnections'   0
+          Set-Reg $rdpKey 'UserAuthentication'   1
+          Set-Reg $rdpKey 'fDisableAudioCapture' 0
+          Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' 'fDisableAudioCapture' 0
 
-        # Đặt mật khẩu cho cả runneradmin và Administrator
-        $pwd = "${{ github.event.inputs.rdp_password }}"
-        try { net user runneradmin "$pwd" } catch {}
-        try { 
-            net user administrator /active:yes
-            net user administrator "$pwd" 
-        } catch {}
+          # --- Bật service RDP + Audio ---
+          foreach ($svc in 'TermService', 'AudioEndpointBuilder', 'Audiosrv') {
+              Set-Service -Name $svc -StartupType Automatic -ErrorAction SilentlyContinue
+              Start-Service -Name $svc -ErrorAction SilentlyContinue
+          }
 
-        # Bật dịch vụ Audio/Mic
-        Set-Service -Name Audiosrv -StartupType Automatic
-        Start-Service -Name Audiosrv
-        Set-Service -Name AudioEndpointBuilder -StartupType Automatic
-        Start-Service -Name AudioEndpointBuilder
+          # --- Firewall: rule RDP mặc định + rule riêng cho dải IP Tailscale ---
+          Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue
+          if (-not (Get-NetFirewallRule -DisplayName 'RDP-Tailscale' -ErrorAction SilentlyContinue)) {
+              $fw = @{
+                  DisplayName   = 'RDP-Tailscale'
+                  Direction     = 'Inbound'
+                  Protocol      = 'TCP'
+                  LocalPort     = 3389
+                  RemoteAddress = '100.64.0.0/10'
+                  Action        = 'Allow'
+                  Profile       = 'Any'
+              }
+              New-NetFirewallRule @fw | Out-Null
+          }
 
-    - name: 2. Tailscale Setup
-      uses: tailscale/github-action@v3
-      with:
-        authkey: ${{ github.event.inputs.tailscale_authkey }}
-        hostname: cloudtrkien
-        args: --advertise-exit-node=false
+          # --- Đặt mật khẩu cho runneradmin (sai policy thì báo lỗi rõ ràng) ---
+          if ([string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) { throw 'rdp_password is empty' }
+          $secure = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
+          Set-LocalUser -Name 'runneradmin' -Password $secure
+          Write-Host 'RDP enabled, runneradmin password set.'
 
-    - name: 3. Send Discord Notification
-      shell: powershell
-      run: |
-        Start-Sleep -Seconds 10
-        $tsIP = "Unknown"
-        try {
-            $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4).Trim()
-        } catch {}
+      - name: 2. Tailscale Setup
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ inputs.tailscale_authkey }}
+          hostname: cloudtrkien
 
-        $rdpPass = "${{ github.event.inputs.rdp_password }}"
-        $channelId = "${{ github.event.inputs.discord_channel_id }}"
-        $botToken = "${{ github.event.inputs.discord_token }}"
-        $userCode = '`Administrator` (hoặc `runneradmin`)'
+      - name: 3. Send Discord Notification
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ inputs.rdp_password }}
+          DISCORD_TOKEN: ${{ inputs.discord_token }}
+          DISCORD_CHANNEL_ID: ${{ inputs.discord_channel_id }}
+        run: |
+          # --- Lấy IP Tailscale (chờ tối đa ~60s) ---
+          $tsExe = 'C:\Program Files\Tailscale\tailscale.exe'
+          if (-not (Test-Path $tsExe)) { $tsExe = 'tailscale' }
 
-        $content = "🚀 **CLOUDTRKIEN RDP STARTED!**`n" +
-                   "----------------------------------------------`n" +
-                   "📍 **IP:** $tsIP`n" +
-                   "👤 **User:** $userCode`n" +
-                   "🔑 **Pass:** $rdpPass`n" +
-                   "🔊 **Audio/Mic:** Enabled`n" +
-                   "⚡ **Status:** Stable & Ready!"
+          $tsIP = $null
+          for ($i = 1; $i -le 12 -and -not $tsIP; $i++) {
+              try { $tsIP = & $tsExe ip -4 | Select-Object -First 1 } catch { $tsIP = $null }
+              if (-not $tsIP) { Start-Sleep -Seconds 5 }
+          }
+          if (-not $tsIP) { throw 'Could not get the Tailscale IP - check the auth key / Tailscale step.' }
+          $tsIP = "$tsIP".Trim()
+          Write-Host "Tailscale IP: $tsIP"
 
-        $body = @{ content = $content } \vert{} ConvertTo-Json$headers = @{
-            "Authorization" = "Bot $botToken"
-            "Content-Type" = "application/json"
-        }
+          # --- Soạn tin nhắn (dùng :shortcode: thay emoji để khỏi lỗi encoding) ---
+          $bt = [string][char]96
+          $content = @(
+              ':rocket: **CLOUDTRKIEN RDP STARTED!**'
+              '----------------------------------------------'
+              ":round_pushpin: **IP:** $bt$tsIP$bt"
+              ":bust_in_silhouette: **User:** ${bt}runneradmin${bt}"
+              ":key: **Pass:** $bt$($env:RDP_PASSWORD)$bt"
+              ':loud_sound: **Audio/Mic:** Enabled'
+              ':zap: **Status:** Stable & Ready!'
+          ) -join "`n"
 
-        try {
-            Invoke-RestMethod -Uri "https://discord.com/api/v10/channels/$channelId/messages" -Method Post -Headers $headers -Body$body
-        } catch {}
+          # --- Gửi Discord (retry 3 lần; lỗi thì cảnh báo nhưng KHÔNG làm chết runner) ---
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $json = @{ content = $content } | ConvertTo-Json -Compress
+          $req = @{
+              Uri         = 'https://discord.com/api/v10/channels/' + $env:DISCORD_CHANNEL_ID.Trim() + '/messages'
+              Method      = 'Post'
+              Headers     = @{ Authorization = 'Bot ' + $env:DISCORD_TOKEN.Trim() }
+              UserAgent   = 'DiscordBot (https://github.com, 1.0)'
+              ContentType = 'application/json; charset=utf-8'
+              Body        = [System.Text.Encoding]::UTF8.GetBytes($json)
+          }
 
-    - name: 4. Keep Alive
-      shell: powershell
-      run: |
-        while ($true) {
-            Start-Sleep -Seconds 30
-        }
+          $sent = $false
+          for ($n = 1; $n -le 3 -and -not $sent; $n++) {
+              try {
+                  Invoke-RestMethod @req | Out-Null
+                  $sent = $true
+                  Write-Host 'Discord notification sent.'
+              } catch {
+                  Write-Warning "Discord attempt $n/3 failed: $($_.Exception.Message)"
+                  Start-Sleep -Seconds 5
+              }
+          }
+          if (-not $sent) { Write-Warning 'Discord message NOT sent - use the Tailscale IP printed above.' }
+
+      - name: 4. Keep Alive
+        shell: powershell
+        run: |
+          # Chạy tới phút 345 rồi thoát êm (job xanh + Tailscale tự logout),
+          # thay vì bị timeout 360 phút kill giữa chừng.
+          $deadline = (Get-Date).AddMinutes(345)
+          Write-Host "Keep-alive until $($deadline.ToString('HH:mm')) (runner time)"
+          while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Seconds 300
+              Write-Host ('alive ' + (Get-Date -Format 'HH:mm'))
+          }
