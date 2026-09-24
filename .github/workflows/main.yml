@@ -31,11 +31,26 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 1. Kết nối mạng Tailscale VPN
-        uses: tailscale/github-action@v2
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
-          args: --hostname=github-rdp-${{ inputs.os_version }}
+      - name: 1. Cài đặt và Kết nối Tailscale VPN trên Windows
+        run: |
+          try {
+              Write-Host "Đang cài đặt Tailscale qua Chocolatey..."
+              choco install tailscale -y
+              
+              $tailscalePath = "C:\Program Files\Tailscale"
+              if (Test-Path "$tailscalePath\tailscale.exe") {
+                  $env:Path += ";$tailscalePath"
+              }
+              
+              Write-Host "Đang xác thực Tailscale bằng AuthKey..."
+              & "$tailscalePath\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" --hostname="github-rdp-${{ inputs.os_version }}" --accept-routes
+              
+              Write-Host "✅ Kết nối Tailscale thành công!" -ForegroundColor Green
+          } catch {
+              Write-Error "❌ LỖI TAILSCALE: $_"
+              exit 1
+          }
+        shell: powershell
 
       - name: 2. Kích hoạt Remote Desktop (RDP) & Firewall
         run: |
@@ -95,7 +110,7 @@ jobs:
               [Wallpaper]::SystemParametersInfo(20, 0, $outputPath, 3)
               Write-Host "✅ Đã áp dụng hình nền thành công!" -ForegroundColor Green
           } catch {
-              Write-Warning "⚠️ Không tải được hình nền từ Google Drive (có thể do link chia sẻ). Hệ thống sẽ dùng giao diện mặc định."
+              Write-Warning "⚠️ Không tải được hình nền từ Google Drive. Dùng giao diện mặc định."
           }
         shell: powershell
 
@@ -119,9 +134,10 @@ jobs:
         run: |
           try {
               Write-Host "Đang lấy địa chỉ IP từ Tailscale..."
-              $tsIp = (tailscale ip -4)
+              $tailscalePath = "C:\Program Files\Tailscale"
+              $tsIp = & "$tailscalePath\tailscale.exe" ip -4
               if (-not $tsIp) {
-                  throw "Không thể trích xuất IP Tailscale. Kiểm tra lại Tailscale AuthKey trong Secrets!"
+                  throw "Không thể trích xuất IP Tailscale."
               }
               $connectionString = "$tsIp:3389"
               $password = "RDP@Password2026!"
