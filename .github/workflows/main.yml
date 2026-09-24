@@ -111,35 +111,31 @@ jobs:
 
       - name: 7. Lấy IP Tailscale và Hiển thị thông tin kết nối
         run: |
-          try {
-              Write-Host "Đang chờ Tailscale cấp phát IP..."
-              $tailscalePath = "C:\Program Files\Tailscale"
-              $tsIp = $null
-              
-              for ($i = 1; $i -le 5; $i++) {
-                  $tsIp = & "$tailscalePath\tailscale.exe" ip -4 2>$null
-                  if ($tsIp) { break }
-                  Write-Host "Đang thử lại lấy IP lần $i..."
-                  Start-Sleep -Seconds 3
-              }
+          $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
+          Write-Host "Đang chờ Tailscale cấp phát IP..."
+          Start-Sleep -Seconds 8
+          
+          $tsIp = & $tsPath ip -4
+          if (-not $tsIp) {
+              Write-Host "Đang thử lại lần 2..."
+              Start-Sleep -Seconds 5
+              $tsIp = & $tsPath ip -4
+          }
 
-              if (-not $tsIp) {
-                  throw "Không thể trích xuất IP Tailscale. Hãy kiểm tra lại Tailscale AuthKey!"
-              }
-              
-              $connectionString = "$tsIp:3389"
-              $password = "RDP@Password2026!"
-
-              Write-Host "============================================================" -ForegroundColor Cyan
-              Write-Host " 🎉 MÁY ẢO RDP ĐÃ SẴN SÀNG SỬ DỤNG!" -ForegroundColor Green
-              Write-Host " 🌐 Địa chỉ IP RDP  : $connectionString" -ForegroundColor Yellow
-              Write-Host " 👤 Tài khoản       : runneradmin" -ForegroundColor Cyan
-              Write-Host " 🔒 Mật khẩu        : $password" -ForegroundColor Cyan
-              Write-Host "============================================================" -ForegroundColor Cyan
-          } catch {
-              Write-Error "❌ LỖI Ở BƯỚC LẤY IP: $_"
+          if (-not $tsIp) {
+              Write-Error "❌ Không thể lấy được IP Tailscale!"
               exit 1
           }
+
+          $connectionString = "$tsIp:3389"
+          $password = "RDP@Password2026!"
+
+          Write-Host "============================================================"
+          Write-Host " 🎉 MÁY ẢO RDP ĐÃ SẴN SÀNG SỬ DỤNG!" -ForegroundColor Green
+          Write-Host " 🌐 Địa chỉ IP RDP  : $connectionString" -ForegroundColor Yellow
+          Write-Host " 👤 Tài khoản       : runneradmin" -ForegroundColor Cyan
+          Write-Host " 🔒 Mật khẩu        : $password" -ForegroundColor Cyan
+          Write-Host "============================================================"
         shell: powershell
 
       - name: 8. Duy trì phiên hoạt động
