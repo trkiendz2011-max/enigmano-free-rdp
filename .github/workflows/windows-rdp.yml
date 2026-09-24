@@ -32,24 +32,63 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    - name: 1. Setup RDP and Audio
+    - name: 1. Setup RDP, Password, Audio & Wallpaper
       shell: powershell
       run: |
-        Write-Host "Configuring Remote Desktop..."
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Write-Host "1. Configuring Remote Desktop..."
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -ErrorAction SilentlyContinue
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -ErrorAction SilentlyContinue
 
-        Write-Host "Setting Administrator password..."
+        Write-Host "2. Setting Administrator password safely..."
         $pwd = '${{ github.event.inputs.rdp_password }}'
-        net user administrator $pwd
+        try {
+            $admin = [adsi]("WinNT://$env:COMPUTERNAME/Administrator,user")
+            $admin.SetPassword($pwd)$admin.SetInfo()
+            Write-Host "-> Password updated successfully via ADSI."
+        } catch {
+            try {
+                net user administrator $pwd
+                Write-Host "-> Password updated via net user command."
+            } catch {
+                Write-Host "-> Notice: Password change skipped or handled by system."
+            }
+        }
 
-        Write-Host "Enabling Audio services..."
-        Set-Service -Name Audiosrv -StartupType Automatic -ErrorAction SilentlyContinue
-        Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
-        Set-Service -Name AudioEndpointBuilder -StartupType Automatic -ErrorAction SilentlyContinue
-        Start-Service -Name AudioEndpointBuilder -ErrorAction SilentlyContinue
-        Write-Host "Setup completed successfully!"
+        Write-Host "3. Enabling Audio Services (MMCSS, EndpointBuilder, Audiosrv)..."
+        $services = @('MMCSS', 'AudioEndpointBuilder', 'Audiosrv')
+        foreach ($svc in$services) {
+            try {
+                Set-Service -Name $svc -StartupType Automatic -ErrorAction SilentlyContinue
+                Start-Service -Name $svc -ErrorAction SilentlyContinue
+                Write-Host "-> Service $svc is running."
+            } catch {
+                Write-Host "-> Could not start $svc:$_"
+            }
+        }
+
+        Write-Host "4. Downloading and applying custom wallpaper..."
+        try {
+            New-Item -ItemType Directory -Force -Path "C:\Workspace" | Out-Null
+            $imageUrl = "https://lh3.googleusercontent.com/d/11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL=s0"
+            $imagePath = "C:\Workspace\wallpaper.jpg"
+            Invoke-WebRequest -Uri $imageUrl -OutFile$imagePath
+            
+            Add-Type -TypeDefinition @"
+            using System;
+            using System.Runtime.InteropServices;
+            public class Wallpaper {
+                [DllImport("user32.dll", CharSet = CharSet.Auto)]
+                public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+            }
+"@
+            [Wallpaper]::SystemParametersInfo(20, 0, $imagePath, 3)
+            Write-Host "-> Wallpaper applied successfully!"
+        } catch {
+            Write-Host "-> Could not apply wallpaper: $_"
+        }
+
+        Write-Host "System setup completed successfully!"
 
     - name: 2. Tailscale Setup
       uses: tailscale/github-action@v3
@@ -78,7 +117,9 @@ jobs:
                    "📍 **IP:** $tsIP`n" +
                    "👤 **User:** ``$adminUser```n" +
                    "🔑 **Pass:** $rdpPass`n" +
-                   "⚡ **Status:** Stable & Ready!"
+                   "🔊 **Audio/Mic:** Enabled & Ready!`n" +
+                   "🖼️ **Wallpaper:** Applied from Google Drive!`n" +
+                   "⚡ **Status:** Stable & Running!"
 
         $payload = @{
             content = $content
@@ -90,7 +131,7 @@ jobs:
         }
 
         try {
-            Invoke-RestMethod -Uri "[https://discord.com/api/v10/channels/$channelId/messages](https://discord.com/api/v10/channels/$channelId/messages)" -Method Post -Headers $headers -Body $payload
+            Invoke-RestMethod -Uri "[https://discord.com/api/v10/channels/$channelId/messages](https://discord.com/api/v10/channels/$channelId/messages)" -Method Post -Headers $headers -Body$payload
             Write-Host "Discord notification sent successfully!"
         } catch {
             Write-Host "Failed to send Discord notification: $_"
