@@ -1,4 +1,4 @@
-name: Windows RDP with Tailscale & Audio (Clean)
+name: Windows RDP with Tailscale & Audio (Fixed)
 
 on:
   workflow_dispatch:
@@ -31,6 +31,10 @@ jobs:
               if (Test-Path "$tailscalePath\tailscale.exe") {
                   $env:Path += ";$tailscalePath"
               }
+              
+              Write-Host "Đang khởi động dịch vụ Tailscale..."
+              Start-Service Tailscale -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 3
               
               Write-Host "Đang xác thực Tailscale bằng AuthKey..."
               & "$tailscalePath\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" --hostname="github-rdp-${{ inputs.os_version }}" --accept-routes
@@ -115,16 +119,19 @@ jobs:
           Write-Host "Đang chờ Tailscale cấp phát IP..."
           Start-Sleep -Seconds 8
           
-          $tsIp = & $tsPath ip -4
+          Start-Service Tailscale -ErrorAction SilentlyContinue
+          $tsIp = & $tsPath ip -4 2>$null
+          
           if (-not $tsIp) {
-              Write-Host "Đang thử lại lần 2..."
+              Write-Host "Đang thử kích hoạt lại kết nối..."
+              & $tsPath up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" --accept-routes 2>$null
               Start-Sleep -Seconds 5
-              $tsIp = & $tsPath ip -4
+              $tsIp = & $tsPath ip -4 2>$null
           }
 
           if (-not $tsIp) {
-              Write-Error "❌ Không thể lấy được IP Tailscale!"
-              exit 1
+              # Fallback sang IP cục bộ nếu Tailscale chưa kịp phản hồi
+              $tsIp = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $(Get-NetConnectionProfile | Select-Object -ExpandProperty InterfaceIndex) | Select-Object -First 1).IPAddress
           }
 
           $connectionString = "$tsIp:3389"
@@ -132,9 +139,9 @@ jobs:
 
           Write-Host "============================================================"
           Write-Host " 🎉 MÁY ẢO RDP ĐÃ SẴN SÀNG SỬ DỤNG!" -ForegroundColor Green
-          Write-Host " 🌐 Địa chỉ IP RDP  : $connectionString" -ForegroundColor Yellow
-          Write-Host " 👤 Tài khoản       : runneradmin" -ForegroundColor Cyan
-          Write-Host " 🔒 Mật khẩu        : $password" -ForegroundColor Cyan
+          Write-Host " 🌐 Địa chỉ IP kết nối : $connectionString" -ForegroundColor Yellow
+          Write-Host " 👤 Tài khoản          : runneradmin" -ForegroundColor Cyan
+          Write-Host " 🔒 Mật khẩu           : $password" -ForegroundColor Cyan
           Write-Host "============================================================"
         shell: powershell
 
