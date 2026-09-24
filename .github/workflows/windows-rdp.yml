@@ -1,4 +1,4 @@
-name: Windows RDP Stable
+name: Windows RDP Master Stable
 
 on:
   workflow_dispatch:
@@ -35,60 +35,71 @@ jobs:
     - name: 1. Setup RDP and Audio
       shell: powershell
       run: |
-        # Mở Remote Desktop và cấu hình tường lửa
+        Write-Host "Configuring Remote Desktop..."
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
-        
-        # Đặt mật khẩu Administrator
-        $pass = "${{ github.event.inputs.rdp_password }}"
-        net user administrator $pass
-        
-        # Bật dịch vụ âm thanh (Audio/Microphone)
-        Set-Service -Name Audiosrv -StartupType Automatic
-        Start-Service -Name Audiosrv
-        Set-Service -Name AudioEndpointBuilder -StartupType Automatic
-        Start-Service -Name AudioEndpointBuilder
-        
-        Write-Host "Cau hinh RDP va Audio thanh cong!"
 
-    - name: 2. Tailscale Setup (Host: cloudtrkien)
+        Write-Host "Setting Administrator password..."
+        $pwd = '${{ github.event.inputs.rdp_password }}'
+        net user administrator $pwd
+
+        Write-Host "Enabling Audio services..."
+        Set-Service -Name Audiosrv -StartupType Automatic -ErrorAction SilentlyContinue
+        Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
+        Set-Service -Name AudioEndpointBuilder -StartupType Automatic -ErrorAction SilentlyContinue
+        Start-Service -Name AudioEndpointBuilder -ErrorAction SilentlyContinue
+        Write-Host "Setup completed successfully!"
+
+    - name: 2. Tailscale Setup
       uses: tailscale/github-action@v3
       with:
         authkey: ${{ github.event.inputs.tailscale_authkey }}
         hostname: cloudtrkien
         args: --advertise-exit-node=false
 
-    - name: 3. Send Notification to Discord
+    - name: 3. Send Discord Notification
       shell: powershell
       run: |
-        Start-Sleep -Seconds 5
-        $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-        $uCode = '`administrator`'
-        
-        $msg = "🚀 **CLOUDTRKIEN RDP STARTED!**`n" +
-               "----------------------------------------------`n" +
-               "📍 **IP:** $tsIP`n" +
-               "👤 **User:** $uCode`n" +
-               "🔑 **Pass:** ${{ github.event.inputs.rdp_password }}`n" +
-               "⚡ **Status:** Stable & Ready!"
-        
+        Start-Sleep -Seconds 10
+        try {
+            $tsIP = (tailscale ip -4).Trim()
+        } catch {
+            $tsIP = "Could not retrieve IP"
+        }
+
+        $adminUser = "administrator"
+        $rdpPass = '${{ github.event.inputs.rdp_password }}'
+        $channelId = '${{ github.event.inputs.discord_channel_id }}'
+        $botToken = '${{ github.event.inputs.discord_token }}'
+
+        $content = "🚀 **CLOUDTRKIEN RDP STARTED!**`n" +
+                   "----------------------------------------------`n" +
+                   "📍 **IP:** $tsIP`n" +
+                   "👤 **User:** ``$adminUser```n" +
+                   "🔑 **Pass:** $rdpPass`n" +
+                   "⚡ **Status:** Stable & Ready!"
+
+        $payload = @{
+            content = $content
+        } | ConvertTo-Json
+
         $headers = @{
-            "Authorization" = "Bot ${{ github.event.inputs.discord_token }}"
+            "Authorization" = "Bot $botToken"
             "Content-Type" = "application/json"
         }
-        $body = @{
-            content = $msg
-        } | ConvertTo-Json
-        
+
         try {
-            Invoke-RestMethod -Uri "https://discord.com/api/v10/channels/${{ github.event.inputs.discord_channel_id }}/messages" -Method Post -Headers $headers -Body$body
-        } catch {}
+            Invoke-RestMethod -Uri "[https://discord.com/api/v10/channels/$channelId/messages](https://discord.com/api/v10/channels/$channelId/messages)" -Method Post -Headers $headers -Body $payload
+            Write-Host "Discord notification sent successfully!"
+        } catch {
+            Write-Host "Failed to send Discord notification: $_"
+        }
 
     - name: 4. Keep Alive
       shell: powershell
       run: |
-        Write-Host "May ao dang chay on dinh..."
+        Write-Host "RDP runner is active and keeping alive..."
         while ($true) {
             Start-Sleep -Seconds 30
         }
