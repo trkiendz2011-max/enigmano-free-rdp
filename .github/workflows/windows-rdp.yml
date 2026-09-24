@@ -35,23 +35,29 @@ jobs:
     - name: 1. Setup and Optimize System
       shell: powershell
       run: |
+        # Mở RDP và cấu hình tường lửa
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
         
+        # Đặt mật khẩu Administrator
         $pass = "${{ github.event.inputs.rdp_password }}"
         net user administrator $pass
         
+        # Bật dịch vụ âm thanh (Micro/Audio)
         Set-Service -Name Audiosrv -StartupType Automatic
         Start-Service -Name Audiosrv
         Set-Service -Name AudioEndpointBuilder -StartupType Automatic
         Start-Service -Name AudioEndpointBuilder
         
+        # Chuyển Power Plan sang High Performance
         powercfg -s 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
         
+        # Tắt hiệu ứng đồ họa nặng để tăng tốc độ RDP
         Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "UserPreferencesMask" -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -ErrorAction SilentlyContinue
         Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name "MinAnimate" -Value 0 -ErrorAction SilentlyContinue
 
+        # Tối ưu hóa hiệu năng phần cứng ngầm
         Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
         Stop-Service wuauserv -ErrorAction SilentlyContinue
         Set-Service wuauserv -StartupType Disabled -ErrorAction SilentlyContinue
@@ -60,8 +66,10 @@ jobs:
         Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -Path "C:\Users\Administrator\AppData\Local\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
         
+        # Tạo thư mục làm việc chung
         New-Item -ItemType Directory -Force -Path "C:\Workspace"
         
+        # Tạo Script Backup nhanh trên Desktop
         $backupScript = @'
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $backupDir = "C:\Users\Administrator\Desktop\Backup"
@@ -74,6 +82,7 @@ jobs:
 '@
         Set-Content -Path "C:\Users\Administrator\Desktop\Nen_Va_Backup.ps1" -Value $backupScript
 
+        # Tự động tải hình nền từ Google Drive và áp dụng
         try {
             $imageUrl = "https://lh3.googleusercontent.com/d/11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL=s0"
             $imagePath = "C:\Workspace\wallpaper.jpg"
@@ -90,6 +99,7 @@ jobs:
             [Wallpaper]::SystemParametersInfo(20, 0, $imagePath, 3)
         } catch {}
 
+        # Tạo Menu kiểm tra trạng thái hệ thống
         $menuScript = @'
         while ($true) {
             Clear-Host
@@ -123,11 +133,12 @@ jobs:
       run: |
         Start-Sleep -Seconds 5
         $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+        $uCode = '`administrator`'
         
         $msg = "🚀 **CLOUDTRKIEN RDP STARTED!**`n" +
                "----------------------------------------------`n" +
                "📍 **IP:** $tsIP`n" +
-               "👤 **User:** administrator`n" +
+               "👤 **User:** $uCode`n" +
                "🔑 **Pass:** ${{ github.event.inputs.rdp_password }}`n" +
                "🖼️ **Wallpaper:** Loaded from Google Drive!"
         
