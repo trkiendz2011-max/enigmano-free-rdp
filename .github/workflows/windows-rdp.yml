@@ -19,9 +19,8 @@ on:
         required: true
         default: '1413508445323133001'
       discord_token:
-        description: 'Discord Bot Token'
+        description: 'Discord Bot Token (Dán token của anh vào đây khi bấm chạy)'
         required: true
-        default: 'MTQ2OTI1NzA0NjUyMzI0ODc3Mw.GeB16u.9bmfU7SkOQCYQN34BfNw1NTryeR6nvE9ZqOVl8'
       rdp_password:
         description: 'Mật khẩu tài khoản Administrator'
         required: true
@@ -69,7 +68,7 @@ jobs:
         Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -Path "C:\Users\Administrator\AppData\Local\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
         
-        # Tạo thư mục làm việc chung và Script Backup mẫu trên Desktop (Đã fix chuẩn đường dẫn)
+        # Tạo thư mục làm việc chung và Script Backup mẫu trên Desktop
         New-Item -ItemType Directory -Force -Path "C:\Workspace"
         
         $backupScript = @"
