@@ -1,4 +1,4 @@
-name: Windows RDP with Tailscale & Audio (Debug Fix)
+name: Windows RDP Stable & Safe
 
 on:
   workflow_dispatch:
@@ -18,146 +18,155 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: 1. Cài đặt và Kết nối Tailscale VPN trên Windows
+      - name: 1. Cài đặt và kết nối Tailscale VPN
+        shell: powershell
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          try {
-              Write-Host "Đang cài đặt Tailscale qua Chocolatey..."
-              choco install tailscale -y --no-progress
-              
-              $tailscalePath = "C:\Program Files\Tailscale"
-              if (Test-Path "$tailscalePath\tailscale.exe") {
-                  $env:Path += ";$tailscalePath"
-              }
-              
-              Write-Host "Đang khởi động dịch vụ Tailscale..."
-              Restart-Service Tailscale -ErrorAction SilentlyContinue
-              Start-Sleep -Seconds 5
-              
-              Write-Host "Đang xác thực Tailscale bằng AuthKey..."
-              $output = & "$tailscalePath\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" --hostname="github-rdp-${{ inputs.os_version }}" --accept-routes --reset 2>&1
-              Write-Host $output
-              
-              Write-Host "✅ Đã gửi lệnh kết nối Tailscale!" -ForegroundColor Green
-          } catch {
-              Write-Error "❌ LỖI TẠI BƯỚC CÀI ĐẶT TAILSCALE: $_"
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
+              Write-Error "❌ Thiếu secret TAILSCALE_AUTHKEY"
               exit 1
           }
-        shell: powershell
 
-      - name: 2. Kích hoạt Remote Desktop (RDP) & Firewall
-        run: |
-          try {
-              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -ErrorAction Stop
-              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -ErrorAction Stop
-              Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction Stop
-              Write-Host "✅ Đã bật RDP và Firewall thành công!" -ForegroundColor Green
-          } catch {
-              Write-Error "❌ LỖI BẬT RDP: $_"
+          Write-Host "Đang cài đặt Tailscale..."
+          choco install tailscale -y --no-progress
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          if (-not (Test-Path $ts)) {
+              Write-Error "❌ Cài Tailscale thất bại"
               exit 1
           }
-        shell: powershell
 
-      - name: 3. Bật dịch vụ Âm thanh & Micro
+          Write-Host "Đang khởi động dịch vụ Tailscale..."
+          Start-Service Tailscale
+          Start-Sleep -Seconds 5
+
+          Write-Host "Đang xác thực..."
+          & $ts up --authkey="$env:TS_AUTHKEY" --hostname="gh-rdp-$env:GITHUB_RUN_ID" --unattended --reset
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "❌ tailscale up thất bại (kiểm tra authkey còn hạn / reusable)"
+              exit 1
+          }
+          Write-Host "✅ Tailscale đã kết nối!" -ForegroundColor Green
+
+      - name: 2. Kích hoạt Remote Desktop và Firewall
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          Set-Service -Name TermService -StartupType Automatic
+          Start-Service TermService -ErrorAction SilentlyContinue
+
+          try {
+              Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          } catch {
+              New-NetFirewallRule -DisplayName "RDP-3389" -Direction Inbound -Protocol TCP -LocalPort 3389 -Action Allow | Out-Null
+          }
+          Write-Host "✅ Đã bật RDP!" -ForegroundColor Green
+
+      - name: 3. Bật dịch vụ Âm thanh và Micro
+        shell: powershell
         run: |
           try {
-              Set-Service -Name Audiosrv -StartupType Automatic -ErrorAction Stop
-              Start-Service Audiosrv -ErrorAction Stop
-              Set-Service -Name AudioEndpointBuilder -StartupType Automatic -ErrorAction Stop
-              Start-Service AudioEndpointBuilder -ErrorAction Stop
-              Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableAudio" -Value 0 -ErrorAction Stop
-              Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableAudioCapture" -Value 0 -ErrorAction Stop
-              Write-Host "✅ Đã bật Audio & Micro thành công!" -ForegroundColor Green
+              Set-Service -Name Audiosrv -StartupType Automatic
+              Set-Service -Name AudioEndpointBuilder -StartupType Automatic
+              Start-Service AudioEndpointBuilder -ErrorAction SilentlyContinue
+              Start-Service Audiosrv -ErrorAction SilentlyContinue
+
+              $tsPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+              if (-not (Test-Path $tsPolicy)) { New-Item -Path $tsPolicy -Force | Out-Null }
+              New-ItemProperty -Path $tsPolicy -Name "fDisableAudio" -Value 0 -PropertyType DWord -Force | Out-Null
+              New-ItemProperty -Path $tsPolicy -Name "fDisableAudioCapture" -Value 0 -PropertyType DWord -Force | Out-Null
+              Write-Host "✅ Đã bật Audio & Micro!" -ForegroundColor Green
           } catch {
-              Write-Warning "⚠️ Cảnh báo khi cấu hình Audio: $_"
+              Write-Warning "⚠️ Bỏ qua lỗi Audio: $_"
           }
-        shell: powershell
 
       - name: 4. Thiết lập tài khoản quản trị viên
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          try {
-              $password = "RDP@Password2026!"
-              net user runneradmin $password /active:yes
-              Write-Host "✅ Đã thiết lập tài khoản runneradmin thành công!" -ForegroundColor Green
-          } catch {
-              Write-Error "❌ LỖI TẠO TÀI KHOẢN: $_"
+          if ([string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
+              Write-Error "❌ Thiếu secret RDP_PASSWORD"
               exit 1
           }
-        shell: powershell
+          net user runneradmin "$env:RDP_PASSWORD" /active:yes
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "❌ Đặt mật khẩu thất bại (mật khẩu cần đủ độ phức tạp)"
+              exit 1
+          }
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
+          Write-Host "✅ Đã cấu hình tài khoản runneradmin!" -ForegroundColor Green
 
-      - name: 5. Tải và cài đặt hình nền tối ưu
+      - name: 5. Tải hình nền
+        shell: powershell
         run: |
           $fileId = "11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL"
-          $wallpaperUrl = "https://drive.google.com/uc?export=download&id=$fileId"
-          $outputPath = "$env:TEMP\wallpaper.jpg"
+          $url = "https://drive.google.com/uc?export=download&id=$fileId"
+          $out = "$env:TEMP\wallpaper.jpg"
           try {
-              Invoke-WebRequest -Uri $wallpaperUrl -OutFile $outputPath -ErrorAction Stop
-              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $outputPath
-              rundll32.exe user32.dll, UpdatePerUserSystemParameters
-              Write-Host "✅ Đã áp dụng hình nền thành công!" -ForegroundColor Green
-          } catch {
-              Write-Warning "⚠️ Không tải được hình nền từ Google Drive. Dùng giao diện mặc định."
-          }
-        shell: powershell
+              Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -ErrorAction Stop
+              if ((Get-Item $out).Length -lt 10240) { throw "File tải về không phải ảnh hợp lệ" }
 
-      - name: 6. Tối ưu hóa hiệu năng máy ảo mượt mà
-        run: |
-          try {
-              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
-              Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' -Name 'Win32PrioritySeparation' -Value 38
-              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value 0
-              Write-Host "✅ Đã tối ưu hiệu năng mượt mà!" -ForegroundColor Green
-          } catch {
-              Write-Warning "⚠️ Lỗi nhỏ khi tối ưu giao diện: $_"
-          }
-        shell: powershell
-
-      - name: 7. Kiểm tra trạng thái và Lấy IP Tailscale
-        run: |
-          $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
-          Write-Host "Đang chờ Tailscale thiết lập kết nối mạng (10 giây)..."
-          Start-Sleep -Seconds 10
-          
-          Write-Host "--- TRẠNG THÁI TAILSCALE HIỆN TẠI ---"
-          & $tsPath status
-          Write-Host "------------------------------------"
-
-          $tsIp = $null
-          try {
-              $statusJson = & $tsPath status --json 2>$null | ConvertFrom-Json
-              if ($statusJson -and $statusJson.Self -and $statusJson.Self.TailscaleIPs) {
-                  $tsIp = $statusJson.Self.TailscaleIPs | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1
+              Add-Type -TypeDefinition @"
+              using System.Runtime.InteropServices;
+              public class Wallpaper {
+                  [DllImport("user32.dll", CharSet = CharSet.Auto)]
+                  public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
               }
+"@
+              [Wallpaper]::SystemParametersInfo(20, 0, $out, 3) | Out-Null
+              Write-Host "✅ Đã áp dụng hình nền!" -ForegroundColor Green
           } catch {
-              Write-Warning "Không thể đọc dữ liệu JSON từ Tailscale."
+              Write-Warning "⚠️ Không đặt được hình nền, dùng mặc định: $_"
           }
 
-          if (-not $tsIp) {
-              $tsIp = & $tsPath ip -4 2>$null
+      - name: 6. Tối ưu hiệu năng
+        shell: powershell
+        run: |
+          try {
+              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Type Binary -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
+              Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' -Name 'Win32PrioritySeparation' -Value 38
+              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
+              Write-Host "✅ Đã tối ưu hiệu năng!" -ForegroundColor Green
+          } catch {
+              Write-Warning "⚠️ Bỏ qua lỗi tối ưu: $_"
           }
 
-          if (-not $tsIp) {
-              Write-Error "❌ Vẫn không lấy được IP Tailscale. Hãy xem bảng trạng thái ở trên xem key có bị lỗi/hết hạn không!"
+      - name: 7. Hiển thị thông tin kết nối RDP
+        shell: powershell
+        run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          $ip = $null
+          for ($i = 1; $i -le 10 -and -not $ip; $i++) {
+              Start-Sleep -Seconds 3
+              $ip = (& $ts ip -4 2>$null | Select-Object -First 1)
+          }
+          if (-not $ip) {
+              Write-Error "❌ Không lấy được IP Tailscale, không thể kết nối từ ngoài"
               exit 1
           }
 
-          $connectionString = "$tsIp:3389"
-          $password = "RDP@Password2026!"
-
           Write-Host "============================================================" -ForegroundColor Cyan
-          Write-Host " 🎉 MÁY ẢO RDP ĐÃ SẴN SÀNG SỬ DỤNG!" -ForegroundColor Green
-          Write-Host " 🌐 Địa chỉ IP kết nối : $connectionString" -ForegroundColor Yellow
-          Write-Host " 👤 Tài khoản          : runneradmin" -ForegroundColor Cyan
-          Write-Host " 🔒 Mật khẩu           : $password" -ForegroundColor Cyan
+          Write-Host " 🎉 MÁY ẢO RDP ĐÃ SẴN SÀNG!" -ForegroundColor Green
+          Write-Host " 🌐 Địa chỉ  : ${ip}:3389" -ForegroundColor Yellow
+          Write-Host " 👤 Tài khoản: runneradmin" -ForegroundColor Cyan
+          Write-Host " 🔒 Mật khẩu : (secret RDP_PASSWORD)" -ForegroundColor Cyan
           Write-Host "============================================================" -ForegroundColor Cyan
-        shell: powershell
 
       - name: 8. Duy trì phiên hoạt động
-        run: |
-          Write-Host "Máy ảo đang chạy qua Tailscale. Giữ kết nối trong 6 giờ..."
-          for ($i = 1; $i -le 360; $i++) {
-            Start-Sleep -Seconds 60
-          }
         shell: powershell
+        run: |
+          Write-Host "Máy ảo đang duy trì hoạt động..."
+          for ($i = 1; $i -le 340; $i++) {
+              Start-Sleep -Seconds 60
+          }
+
+      - name: 9. Dọn dẹp Tailscale
+        if: always()
+        shell: powershell
+        run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          if (Test-Path $ts) { & $ts logout 2>$null }
