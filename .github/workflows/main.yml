@@ -35,7 +35,7 @@ jobs:
         run: |
           try {
               Write-Host "Đang cài đặt Tailscale qua Chocolatey..."
-              choco install tailscale -y
+              choco install tailscale -y --no-progress
               
               $tailscalePath = "C:\Program Files\Tailscale"
               if (Test-Path "$tailscalePath\tailscale.exe") {
@@ -106,7 +106,7 @@ jobs:
                   [DllImport("user32.dll", CharSet = CharSet.Auto)]
                   public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
               }
-              "@
+"@
               [Wallpaper]::SystemParametersInfo(20, 0, $outputPath, 3)
               Write-Host "✅ Đã áp dụng hình nền thành công!" -ForegroundColor Green
           } catch {
