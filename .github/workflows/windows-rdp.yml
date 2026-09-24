@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       runner_os:
-        description: 'Chọn phiên bản hệ điều hành'
+        description: 'Chon phien ban he dieu hanh'
         required: true
         default: 'windows-2022'
         type: choice
@@ -12,17 +12,17 @@ on:
           - windows-2022
           - windows-latest
       tailscale_authkey:
-        description: 'Nhập Tailscale Auth Key (tskey-auth-...)'
+        description: 'Tailscale Auth Key'
         required: true
       discord_channel_id:
-        description: 'Nhập Channel ID trên Discord để nhận thông tin'
+        description: 'Discord Channel ID'
         required: true
         default: '1413508445323133001'
       discord_token:
-        description: 'Discord Bot Token (Dán token của anh vào đây khi bấm chạy)'
+        description: 'Discord Bot Token'
         required: true
       rdp_password:
-        description: 'Mật khẩu tài khoản Administrator'
+        description: 'Administrator Password'
         required: true
         default: 'KienDz@2026'
 
@@ -32,34 +32,26 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    - name: 1. Tối ưu hệ thống, hiệu năng, âm thanh (Mic), Hình nền & Menu
+    - name: 1. Toi ưu he thong va cai dat
       shell: powershell
       run: |
-        Write-Host "Đang cấu hình hệ thống, tối ưu hóa phần cứng và cài hình nền..."
-        
-        # Mở kết nối Remote Desktop và tường lửa
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
         
-        # Đặt mật khẩu Administrator
         $pass = "${{ github.event.inputs.rdp_password }}"
         net user administrator $pass
         
-        # Bật và khởi động dịch vụ âm thanh (Windows Audio) để dùng Micro
         Set-Service -Name Audiosrv -StartupType Automatic
         Start-Service -Name Audiosrv
         Set-Service -Name AudioEndpointBuilder -StartupType Automatic
         Start-Service -Name AudioEndpointBuilder
         
-        # Chuyển Power Plan sang High Performance
         powercfg -s 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
         
-        # Tắt hiệu ứng đồ họa nặng để RDP siêu mượt
         Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "UserPreferencesMask" -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -ErrorAction SilentlyContinue
         Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name "MinAnimate" -Value 0 -ErrorAction SilentlyContinue
 
-        # --- TỐI ƯU HÓA HIỆU NĂNG PHẦN CỨNG TỐI ĐA ---
         Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
         Stop-Service wuauserv -ErrorAction SilentlyContinue
         Set-Service wuauserv -StartupType Disabled -ErrorAction SilentlyContinue
@@ -68,7 +60,6 @@ jobs:
         Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -Path "C:\Users\Administrator\AppData\Local\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
         
-        # Tạo thư mục làm việc chung và Script Backup mẫu trên Desktop
         New-Item -ItemType Directory -Force -Path "C:\Workspace"
         
         $backupScript = @"
@@ -77,13 +68,11 @@ jobs:
         New-Item -ItemType Directory -Force -Path `$backupDir
         `$zipFile = "`$backupDir\`$timestamp.zip"
         Compress-Archive -Path "C:\Workspace\*" -DestinationPath `$zipFile -Force
-        Write-Host "Da nen xong du lieu tai: `$zipFile"
         Start-Process "explorer.exe" `$backupDir
         Read-Host "Nhan Enter de thoat..."
 "@
         Set-Content -Path "C:\Users\Administrator\Desktop\Nen_Va_Backup.ps1" -Value $backupScript
 
-        # Tự động tải hình nền từ Google Drive của anh và đặt làm Wallpaper
         try {
             `$imageUrl = "https://lh3.googleusercontent.com/d/11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL=s0"
             `$imagePath = "C:\Workspace\wallpaper.jpg"
@@ -98,59 +87,48 @@ jobs:
             }
 "@
             [Wallpaper]::SystemParametersInfo(20, 0, `$imagePath, 3)
-            Write-Host "Đã cài đặt hình nền máy tính thành công!"
-        } catch {
-            Write-Host "Không thể tải hình nền: `$_"
-        }
+        } catch {}
 
-        # Tạo Menu kiểm tra thông tin máy ảo chuẩn xác, không lỗi
         $menuScript = @"
         while (`$true) {
             Clear-Host
-            Write-Host "==============================================" -ForegroundColor Cyan
-            Write-Host "       MENU KIỂM TRA TRẠNG THÁI MÁY ẢO        " -ForegroundColor Yellow
-            Write-Host "==============================================" -ForegroundColor Cyan
+            Write-Host "=== MENU QUAN LY MAY AO ===" -ForegroundColor Cyan
             `$cpu = (Get-WmiObject Win32_Processor).Name
             `$os = Get-CimInstance Win32_OperatingSystem
             `$freeRAM = "{0:N2} GB" -f (`$os.FreePhysicalMemory / 1MB)
             `$totalRAM = "{0:N2} GB" -f (`$os.TotalVisibleMemorySize / 1MB)
             `$disk = Get-PSDrive C
             `$freeDisk = "{0:N2} GB" -f (`$disk.Free / 1GB)
-            Write-Host " [1] CPU: `$cpu" -ForegroundColor Green
-            Write-Host " [2] RAM: `$freeRAM trống / `$totalRAM tổng" -ForegroundColor Green
-            Write-Host " [3] Ổ C: `$freeDisk dung lượng trống" -ForegroundColor Green
-            Write-Host "----------------------------------------------" -ForegroundColor Cyan
-            Write-Host " Trạng thái mạng Tailscale:" -ForegroundColor Yellow
+            Write-Host "CPU: `$cpu" -ForegroundColor Green
+            Write-Host "RAM: `$freeRAM / `$totalRAM" -ForegroundColor Green
+            Write-Host "Ổ C: `$freeDisk trong" -ForegroundColor Green
+            Write-Host "---------------------------" -ForegroundColor Cyan
             & "`$env:ProgramFiles\Tailscale\tailscale.exe" status
-            Write-Host "==============================================" -ForegroundColor Cyan
-            Write-Host "Bấm phím bất kỳ để làm mới, hoặc đóng cửa sổ để thoát."
-            `$null = `$Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            Write-Host "===========================" -ForegroundColor Cyan
+            Read-Host "Nhan Enter de lam moi..."
         }
 "@
         Set-Content -Path "C:\Users\Administrator\Desktop\Menu_Kiem_Tra.ps1" -Value $menuScript
 
-        Write-Host "Hoàn tất toàn bộ thiết lập hệ thống và tối ưu hiệu năng!"
-
-    - name: 2. Thiết lập mạng riêng tư Tailscale (Host: cloudtrkien)
+    - name: 2. Tailscale
       uses: tailscale/github-action@v3
       with:
         authkey: ${{ github.event.inputs.tailscale_authkey }}
         hostname: cloudtrkien
         args: --advertise-exit-node=false
 
-    - name: 3. Lấy thông tin và gửi qua Discord
+    - name: 3. Discord
       shell: powershell
       run: |
         Start-Sleep -Seconds 5
         $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
         
-        $msg = "🚀 **ĐÃ KHỞI TẠO MÁY ẢO `cloudtrkien` THÀNH CÔNG!**`n" +
+        $msg = "🚀 **MÁY ẢO `cloudtrkien` ĐÃ SẴN SÀNG!**`n" +
                "----------------------------------------------`n" +
-               "📍 **IP Tailscale:** $tsIP`n" +
+               "📍 **IP:** $tsIP`n" +
                "👤 **User:** `administrator`n" +
                "🔑 **Pass:** ${{ github.event.inputs.rdp_password }}`n" +
-               "🖼️ **Hình nền:** Đã tự động áp dụng từ Google Drive!`n" +
-               "⚡ **Tối ưu:** High-Performance, Defender/Update Disabled, Mic & Menu ready!"
+               "🖼️ **Wallpaper:** Đã tải từ Google Drive!"
         
         $headers = @{
             "Authorization" = "Bot ${{ github.event.inputs.discord_token }}"
@@ -162,15 +140,11 @@ jobs:
         
         try {
             Invoke-RestMethod -Uri "https://discord.com/api/v10/channels/${{ github.event.inputs.discord_channel_id }}/messages" -Method Post -Headers $headers -Body$body
-            Write-Host "Đã gửi thông tin RDP qua Discord thành công!"
-        } catch {
-            Write-Host "Lỗi khi gửi Discord: $_"
-        }
+        } catch {}
 
-    - name: 4. Duy trì trạng thái hoạt động
+    - name: 4. Keep alive
       shell: powershell
       run: |
-        Write-Host "Máy ảo đang chạy ổn định. Giữ nguyên tab này."
         while ($true) {
             Start-Sleep -Seconds 30
         }
