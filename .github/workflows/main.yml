@@ -1,0 +1,135 @@
+name: Windows RDP Ultimate Fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_os:
+        description: 'Choose OS Version'
+        required: true
+        default: 'windows-2022'
+        type: choice
+        options:
+          - windows-2022
+          - windows-latest
+      tailscale_authkey:
+        description: 'Tailscale Auth Key'
+        required: true
+      discord_channel_id:
+        description: 'Discord Channel ID'
+        required: true
+        default: '1413508445323133001'
+      discord_token:
+        description: 'Discord Bot Token'
+        required: true
+      rdp_password:
+        description: 'Administrator Password'
+        required: true
+        default: 'KienDz@2026'
+
+jobs:
+  rdp-runner:
+    runs-on: ${{ github.event.inputs.runner_os }}
+    timeout-minutes: 360
+
+    steps:
+    - name: 1. Setup RDP, Password, Audio & Wallpaper
+      shell: powershell
+      run: |
+        Write-Host "=== 1. Configuring Remote Desktop ==="
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -ErrorAction SilentlyContinue
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -ErrorAction SilentlyContinue
+
+        Write-Host "=== 2. Setting Administrator Password ==="
+        $pwd = "${{ github.event.inputs.rdp_password }}"
+        try {
+            net user administrator "$pwd" 2>&1 | Out-Null
+            Write-Host "-> Administrator password updated successfully."
+        } catch {
+            Write-Host "-> Notice on password update: $_"
+        }
+
+        Write-Host "=== 3. Enabling Audio Services ==="
+        foreach ($svc in @('AudioEndpointBuilder', 'Audiosrv')) {
+            try {
+                Set-Service -Name $svc -StartupType Automatic -ErrorAction SilentlyContinue
+                Start-Service -Name $svc -ErrorAction SilentlyContinue
+                Write-Host "-> Service $svc is active."
+            } catch {
+                Write-Host "-> Could not start $svc (non-critical)."
+            }
+        }
+
+        Write-Host "=== 4. Applying Custom Wallpaper ==="
+        try {
+            New-Item -ItemType Directory -Force -Path "C:\Workspace" -ErrorAction SilentlyContinue | Out-Null
+            $imageUrl = "https://lh3.googleusercontent.com/d/11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL=s0"
+            $imagePath = "C:\Workspace\wallpaper.jpg"
+            Invoke-WebRequest -Uri $imageUrl -OutFile $imagePath -ErrorAction SilentlyContinue
+            
+            if (Test-Path $imagePath) {
+                Add-Type -TypeDefinition @"
+                using System;
+                using System.Runtime.InteropServices;
+                public class WallpaperSetter {
+                    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+                    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+                }
+"@ -ErrorAction SilentlyContinue
+                [WallpaperSetter]::SystemParametersInfo(20, 0, $imagePath, 3) | Out-Null
+                Write-Host "-> Wallpaper applied successfully!"
+            }
+        } catch {
+            Write-Host "-> Wallpaper application skipped: $_"
+        }
+        Write-Host "Setup completed successfully!"
+
+    - name: 2. Tailscale Setup
+      uses: tailscale/github-action@v3
+      with:
+        authkey: ${{ github.event.inputs.tailscale_authkey }}
+        hostname: cloudtrkien
+        args: --advertise-exit-node=false
+
+    - name: 3. Send Discord Notification
+      shell: powershell
+      run: |
+        Start-Sleep -Seconds 10
+        $tsIP = "Unknown"
+        try {
+            $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4).Trim()
+        } catch {}
+
+        $rdpPass = "${{ github.event.inputs.rdp_password }}"
+        $channelId = "${{ github.event.inputs.discord_channel_id }}"
+        $botToken = "${{ github.event.inputs.discord_token }}"
+        $userCode = '`administrator`'
+
+        $content = "🚀 **CLOUDTRKIEN RDP STARTED!**`n" +
+                   "----------------------------------------------`n" +
+                   "📍 **IP:** $tsIP`n" +
+                   "👤 **User:** $userCode`n" +
+                   "🔑 **Pass:** $rdpPass`n" +
+                   "🔊 **Audio/Mic:** Enabled`n" +
+                   "🖼️ **Wallpaper:** Loaded`n" +
+                   "⚡ **Status:** Stable & Ready!"
+
+        $body = @{ content = $content } \vert{} ConvertTo-Json$headers = @{
+            "Authorization" = "Bot $botToken"
+            "Content-Type" = "application/json"
+        }
+
+        try {
+            Invoke-RestMethod -Uri "https://discord.com/api/v10/channels/$channelId/messages" -Method Post -Headers $headers -Body$body -ErrorAction Stop
+            Write-Host "Discord notification sent successfully!"
+        } catch {
+            Write-Host "Discord notification warning: $_"
+        }
+
+    - name: 4. Keep Alive
+      shell: powershell
+      run: |
+        Write-Host "RDP runner is active and keeping alive..."
+        while ($true) {
+            Start-Sleep -Seconds 30
+        }
