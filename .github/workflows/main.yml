@@ -1,4 +1,4 @@
-name: Windows RDP Clean Stable
+name: Windows RDP Stable Final
 
 on:
   workflow_dispatch:
@@ -32,34 +32,27 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    - name: 1. Setup RDP, Password & Audio
+    - name: 1. Setup RDP and System
       shell: powershell
       run: |
-        Write-Host "=== 1. Configuring Remote Desktop ==="
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -ErrorAction SilentlyContinue
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -ErrorAction SilentlyContinue
+        # Mở Remote Desktop và tường lửa
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-        Write-Host "=== 2. Setting Administrator Password ==="
+        # Đặt mật khẩu cho cả runneradmin và Administrator
         $pwd = "${{ github.event.inputs.rdp_password }}"
-        try {
-            net user Administrator "$pwd" 2>&1 | Out-Null
-            Write-Host "-> Administrator password updated successfully."
-        } catch {
-            Write-Host "-> Notice on password update: $_"
-        }
+        try { net user runneradmin "$pwd" } catch {}
+        try { 
+            net user administrator /active:yes
+            net user administrator "$pwd" 
+        } catch {}
 
-        Write-Host "=== 3. Enabling Audio Services ==="
-        foreach ($svc in @('AudioEndpointBuilder', 'Audiosrv')) {
-            try {
-                Set-Service -Name $svc -StartupType Automatic -ErrorAction SilentlyContinue
-                Start-Service -Name $svc -ErrorAction SilentlyContinue
-                Write-Host "-> Service $svc is active."
-            } catch {
-                Write-Host "-> Could not start $svc (non-critical)."
-            }
-        }
-        Write-Host "Setup completed successfully!"
+        # Bật dịch vụ Audio/Mic
+        Set-Service -Name Audiosrv -StartupType Automatic
+        Start-Service -Name Audiosrv
+        Set-Service -Name AudioEndpointBuilder -StartupType Automatic
+        Start-Service -Name AudioEndpointBuilder
 
     - name: 2. Tailscale Setup
       uses: tailscale/github-action@v3
@@ -80,7 +73,7 @@ jobs:
         $rdpPass = "${{ github.event.inputs.rdp_password }}"
         $channelId = "${{ github.event.inputs.discord_channel_id }}"
         $botToken = "${{ github.event.inputs.discord_token }}"
-        $userCode = '`Administrator`'
+        $userCode = '`Administrator` (hoặc `runneradmin`)'
 
         $content = "🚀 **CLOUDTRKIEN RDP STARTED!**`n" +
                    "----------------------------------------------`n" +
@@ -96,16 +89,12 @@ jobs:
         }
 
         try {
-            Invoke-RestMethod -Uri "https://discord.com/api/v10/channels/$channelId/messages" -Method Post -Headers $headers -Body$body -ErrorAction Stop
-            Write-Host "Discord notification sent successfully!"
-        } catch {
-            Write-Host "Discord notification warning: $_"
-        }
+            Invoke-RestMethod -Uri "https://discord.com/api/v10/channels/$channelId/messages" -Method Post -Headers $headers -Body$body
+        } catch {}
 
     - name: 4. Keep Alive
       shell: powershell
       run: |
-        Write-Host "RDP runner is active and keeping alive..."
         while ($true) {
             Start-Sleep -Seconds 30
         }
