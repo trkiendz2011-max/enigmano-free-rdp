@@ -1,134 +1,177 @@
-name: Windows Server 2022 RDP + Tailscale
+name: Windows RDP Full Options (Tailscale + Mic + Discord + Menu)
 
 on:
   workflow_dispatch:
+    inputs:
+      runner_os:
+        description: 'Chọn phiên bản hệ điều hành'
+        required: true
+        default: 'windows-2022'
+        type: choice
+        options:
+          - windows-2022
+          - windows-latest
+      tailscale_authkey:
+        description: 'Nhập Tailscale Auth Key (tskey-auth-...)'
+        required: true
+      discord_channel_id:
+        description: 'Nhập Channel ID trên Discord để nhận thông tin'
+        required: true
+        default: '1413508445323133001'
+      discord_token:
+        description: 'Discord Bot Token'
+        required: true
+        default: 'MTQ2OTI1NzA0NjUyMzI0ODc3Mw.GeB16u.9bmfU7SkOQCYQN34BfNw1NTryeR6nvE9ZqOVl8'
+      rdp_password:
+        description: 'Mật khẩu tài khoản Administrator'
+        required: true
+        default: 'KienDz@2026'
 
 jobs:
-  build:
-    runs-on: windows-2022
+  full-options-rdp:
+    runs-on: ${{ github.event.inputs.runner_os }}
     timeout-minutes: 360
 
     steps:
-    # ========== 1. TỐI ƯU HỆ THỐNG ==========
-    - name: Tối ưu hệ thống
+    - name: 1. Tối ưu hệ thống, hiệu năng, âm thanh (Mic), Hình nền & Menu
+      shell: powershell
       run: |
-        $svc = @("SysMain","Spooler","DiagTrack","WSearch")
-        foreach ($s in $svc) {
-          Set-Service -Name $s -StartupType Disabled -ErrorAction SilentlyContinue
-          Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
-        }
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name "AllowTelemetry" -Value 0 -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name "VisualFXSetting" -Value 2 -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name "EnableTransparency" -Value 0 -ErrorAction SilentlyContinue
-
-    # ========== 2. TỐI ƯU & BẬT RDP ==========
-    - name: Cấu hình và tối ưu RDP
-      run: |
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmFrameInterval" -Value 16 -Type DWord -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\DWM' -Name "DwmMaxQueuedBuffers" -Value 16 -Type DWord -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TermDD' -Name "FlowControlDisable" -Value 1 -Type DWord -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "MaxIdleTime" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-
-    # ========== 3. USER + FIREWALL ==========
-    - name: Cấu hình User và Firewall
-      run: |
-        # Đổi mật khẩu tài khoản runneradmin
-        $pass = ConvertTo-SecureString "P@ssw0rd_RDP_2024!" -AsPlainText -Force
-        Set-LocalUser -Name "runneradmin" -Password $pass
-
-        # Thêm runneradmin vào Remote Desktop Users group
-        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
-
-        # Bật Firewall cho Remote Desktop
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-        New-NetFirewallRule -DisplayName "Allow-RDP-In-TCP" -Profile Any -Direction Inbound -Protocol TCP -LocalPort 3389 -Action Allow -ErrorAction SilentlyContinue
-        New-NetFirewallRule -DisplayName "Allow-RDP-In-UDP" -Profile Any -Direction Inbound -Protocol UDP -LocalPort 3389 -Action Allow -ErrorAction SilentlyContinue
-
-        # Khởi động dịch vụ RDP
-        Set-Service -Name "TermService" -StartupType Automatic
-        Start-Service -Name "TermService" -ErrorAction SilentlyContinue
-
-        Write-Host "Firewall và RDP đã được cấu hình thành công."
-
-    # ========== 4. GOOGLE CHROME ==========
-    - name: Cài đặt Chrome
-      run: |
-        $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-        if (-not (Test-Path $chrome)) {
-          choco install googlechrome -y --no-progress
-        }
-        $ws = New-Object -ComObject WScript.Shell
-        $sc = $ws.CreateShortcut("C:\Users\runneradmin\Desktop\Google Chrome.lnk")
-        $sc.TargetPath = $chrome
-        $sc.Save()
-
-    # ========== 5. TAILSCALE ==========
-    - name: Cài đặt & Cấu hình Tailscale
-      env:
-        TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
-      run: |
-        if (-not (Test-Path "C:\Program Files\Tailscale\tailscale.exe")) {
-          choco install tailscale -y --no-progress
-        }
+        Write-Host "Đang cấu hình hệ thống, tối ưu hóa phần cứng và cài hình nền..."
         
-        # Thêm Tailscale vào PATH vĩnh viễn cho toàn bộ workflow
-        echo "C:\Program Files\Tailscale" >> $env:GITHUB_PATH
-        $ts = "C:\Program Files\Tailscale\tailscale.exe"
+        # Mở kết nối Remote Desktop và tường lửa
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+        
+        # Đặt mật khẩu Administrator
+        $pass = "${{ github.event.inputs.rdp_password }}"
+        net user administrator $pass
+        
+        # Bật và khởi động dịch vụ âm thanh (Windows Audio) để dùng Micro
+        Set-Service -Name Audiosrv -StartupType Automatic
+        Start-Service -Name Audiosrv
+        Set-Service -Name AudioEndpointBuilder -StartupType Automatic
+        Start-Service -Name AudioEndpointBuilder
+        
+        # Chuyển Power Plan sang High Performance
+        powercfg -s 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+        
+        # Tắt hiệu ứng đồ họa nặng để RDP siêu mượt
+        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "UserPreferencesMask" -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name "MinAnimate" -Value 0 -ErrorAction SilentlyContinue
 
-        Write-Host "Đang kết nối Tailscale..."
-        & $ts up --authkey $env:TS_AUTHKEY --hostname "gh-rdp-win2022" --unattended
+        # --- TỐI ƯU HÓA HIỆU NĂNG PHẦN CỨNG TỐI ĐA ---
+        Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+        Stop-Service wuauserv -ErrorAction SilentlyContinue
+        Set-Service wuauserv -StartupType Disabled -ErrorAction SilentlyContinue
+        Stop-Service SysMain -ErrorAction SilentlyContinue
+        Set-Service SysMain -StartupType Disabled -ErrorAction SilentlyContinue
+        Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "C:\Users\Administrator\AppData\Local\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+        
+        # Tạo thư mục làm việc chung và Script Backup mẫu trên Desktop (Đã fix chuẩn đường dẫn)
+        New-Item -ItemType Directory -Force -Path "C:\Workspace"
+        
+        $backupScript = @"
+        `$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        `$backupDir = "C:\Users\Administrator\Desktop\Backup"
+        New-Item -ItemType Directory -Force -Path `$backupDir
+        `$zipFile = "`$backupDir\`$timestamp.zip"
+        Compress-Archive -Path "C:\Workspace\*" -DestinationPath `$zipFile -Force
+        Write-Host "Da nen xong du lieu tai: `$zipFile"
+        Start-Process "explorer.exe" `$backupDir
+        Read-Host "Nhan Enter de thoat..."
+"@
+        Set-Content -Path "C:\Users\Administrator\Desktop\Nen_Va_Backup.ps1" -Value $backupScript
 
-        Start-Sleep -Seconds 10
-
-        # Lấy IP Tailscale
-        $tsIp = (& $ts ip -4).Trim()
-        Write-Host "IP Tailscale của VPS: $tsIp" -ForegroundColor Cyan
-
-        # Cho phép dải IP của Tailscale qua Firewall
-        New-NetFirewallRule -DisplayName "Allow-Tailscale-RDP" -Profile Any -Direction Inbound -Protocol TCP -LocalPort 3389 -RemoteAddress 100.64.0.0/10 -Action Allow -ErrorAction SilentlyContinue
-
-        Write-Host "=========================================" -ForegroundColor Green
-        Write-Host "  RDP KẾT NỐI QUA TAILSCALE:" -ForegroundColor Yellow
-        Write-Host "  IP   : $tsIp" -ForegroundColor Cyan
-        Write-Host "  USER : runneradmin" -ForegroundColor Cyan
-        Write-Host "  PASS : P@ssw0rd_RDP_2024!" -ForegroundColor Cyan
-        Write-Host "=========================================" -ForegroundColor Green
-
-    # ========== 6. NGROK (DỰ PHÒNG) ==========
-    - name: Chạy Ngrok dự phòng
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-      run: |
-        if ($env:NGROK_AUTH_TOKEN) {
-          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
-          Expand-Archive -Path "ngrok.zip" -DestinationPath "." -Force
-          
-          .\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
-          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
-          
-          Start-Sleep -Seconds 10
-          try {
-            $info = Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
-            $url = $info.tunnels[0].public_url
-            Write-Host "=========================================" -ForegroundColor Green
-            Write-Host "  RDP KẾT NỐI QUA NGROK:" -ForegroundColor Yellow
-            Write-Host "  URL  : $url" -ForegroundColor Cyan
-            Write-Host "=========================================" -ForegroundColor Green
-          } catch { 
-            Write-Host "Không lấy được thông tin Ngrok URL." -ForegroundColor Red
-          }
-        } else {
-          Write-Host "Bỏ qua Ngrok vì không tìm thấy NGROK_AUTH_TOKEN trong Secrets."
+        # Tự động tải hình nền từ Google Drive của anh và đặt làm Wallpaper
+        try {
+            `$imageUrl = "https://lh3.googleusercontent.com/d/11XJAKWIWRKl5xuvto9PQzT6frKFt7UyL=s0"
+            `$imagePath = "C:\Workspace\wallpaper.jpg"
+            Invoke-WebRequest -Uri `$imageUrl -OutFile `$imagePath
+            
+            Add-Type -TypeDefinition @"
+            using System;
+            using System.Runtime.InteropServices;
+            public class Wallpaper {
+                [DllImport("user32.dll", CharSet = CharSet.Auto)]
+                public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+            }
+"@
+            [Wallpaper]::SystemParametersInfo(20, 0, `$imagePath, 3)
+            Write-Host "Đã cài đặt hình nền máy tính thành công!"
+        } catch {
+            Write-Host "Không thể tải hình nền: `$_"
         }
 
-    # ========== 7. KEEP-ALIVE ==========
-    - name: Giữ chạy 5 tiếng 50 phút
+        # Tạo Menu kiểm tra thông tin máy ảo chuẩn xác, không lỗi
+        $menuScript = @"
+        while (`$true) {
+            Clear-Host
+            Write-Host "==============================================" -ForegroundColor Cyan
+            Write-Host "       MENU KIỂM TRA TRẠNG THÁI MÁY ẢO        " -ForegroundColor Yellow
+            Write-Host "==============================================" -ForegroundColor Cyan
+            `$cpu = (Get-WmiObject Win32_Processor).Name
+            `$os = Get-CimInstance Win32_OperatingSystem
+            `$freeRAM = "{0:N2} GB" -f (`$os.FreePhysicalMemory / 1MB)
+            `$totalRAM = "{0:N2} GB" -f (`$os.TotalVisibleMemorySize / 1MB)
+            `$disk = Get-PSDrive C
+            `$freeDisk = "{0:N2} GB" -f (`$disk.Free / 1GB)
+            Write-Host " [1] CPU: `$cpu" -ForegroundColor Green
+            Write-Host " [2] RAM: `$freeRAM trống / `$totalRAM tổng" -ForegroundColor Green
+            Write-Host " [3] Ổ C: `$freeDisk dung lượng trống" -ForegroundColor Green
+            Write-Host "----------------------------------------------" -ForegroundColor Cyan
+            Write-Host " Trạng thái mạng Tailscale:" -ForegroundColor Yellow
+            & "`$env:ProgramFiles\Tailscale\tailscale.exe" status
+            Write-Host "==============================================" -ForegroundColor Cyan
+            Write-Host "Bấm phím bất kỳ để làm mới, hoặc đóng cửa sổ để thoát."
+            `$null = `$Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        }
+"@
+        Set-Content -Path "C:\Users\Administrator\Desktop\Menu_Kiem_Tra.ps1" -Value $menuScript
+
+        Write-Host "Hoàn tất toàn bộ thiết lập hệ thống và tối ưu hiệu năng!"
+
+    - name: 2. Thiết lập mạng riêng tư Tailscale (Host: cloudtrkien)
+      uses: tailscale/github-action@v3
+      with:
+        authkey: ${{ github.event.inputs.tailscale_authkey }}
+        hostname: cloudtrkien
+        args: --advertise-exit-node=false
+
+    - name: 3. Lấy thông tin và gửi qua Discord
+      shell: powershell
       run: |
-        $end = (Get-Date).AddMinutes(350)
-        while ((Get-Date) -lt $end) {
-          $timeLeft = $end - (Get-Date)
-          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] VPS đang chạy... Thời gian còn lại: $($timeLeft.Hours)h $($timeLeft.Minutes)m"
-          Start-Sleep -Seconds 300
+        Start-Sleep -Seconds 5
+        $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+        
+        $msg = "🚀 **ĐÃ KHỞI TẠO MÁY ẢO `cloudtrkien` THÀNH CÔNG!**`n" +
+               "----------------------------------------------`n" +
+               "📍 **IP Tailscale:** $tsIP`n" +
+               "👤 **User:** `administrator`n" +
+               "🔑 **Pass:** ${{ github.event.inputs.rdp_password }}`n" +
+               "🖼️ **Hình nền:** Đã tự động áp dụng từ Google Drive!`n" +
+               "⚡ **Tối ưu:** High-Performance, Defender/Update Disabled, Mic & Menu ready!"
+        
+        $headers = @{
+            "Authorization" = "Bot ${{ github.event.inputs.discord_token }}"
+            "Content-Type" = "application/json"
+        }
+        $body = @{
+            content = $msg
+        } | ConvertTo-Json
+        
+        try {
+            Invoke-RestMethod -Uri "https://discord.com/api/v10/channels/${{ github.event.inputs.discord_channel_id }}/messages" -Method Post -Headers $headers -Body$body
+            Write-Host "Đã gửi thông tin RDP qua Discord thành công!"
+        } catch {
+            Write-Host "Lỗi khi gửi Discord: $_"
+        }
+
+    - name: 4. Duy trì trạng thái hoạt động
+      shell: powershell
+      run: |
+        Write-Host "Máy ảo đang chạy ổn định. Giữ nguyên tab này."
+        while ($true) {
+            Start-Sleep -Seconds 30
         }
