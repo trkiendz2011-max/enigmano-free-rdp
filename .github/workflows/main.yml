@@ -23,28 +23,29 @@ jobs:
         env:
           TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = "Continue"
           if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
-              Write-Error "❌ Thiếu secret TAILSCALE_AUTHKEY"
+              Write-Host "::error title=Thiếu secret::Chưa có secret TAILSCALE_AUTHKEY. Fork không kế thừa secret, phải thêm trong Settings > Secrets and variables > Actions của chính repo này."
               exit 1
           }
 
           Write-Host "Đang cài đặt Tailscale..."
-          choco install tailscale -y --no-progress
+          choco install tailscale -y --no-progress --limit-output
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           if (-not (Test-Path $ts)) {
-              Write-Error "❌ Cài Tailscale thất bại"
+              Write-Host "::error title=Tailscale::Cài đặt thất bại (choco exit code $LASTEXITCODE)"
               exit 1
           }
 
-          Write-Host "Đang khởi động dịch vụ Tailscale..."
-          Start-Service Tailscale
+          Start-Service Tailscale -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 5
 
           Write-Host "Đang xác thực..."
-          & $ts up --authkey="$env:TS_AUTHKEY" --hostname="gh-rdp-$env:GITHUB_RUN_ID" --unattended --reset
-          if ($LASTEXITCODE -ne 0) {
-              Write-Error "❌ tailscale up thất bại (kiểm tra authkey còn hạn / reusable)"
+          $upOutput = & $ts up --authkey="$env:TS_AUTHKEY" --hostname="gh-rdp-$env:GITHUB_RUN_ID" --unattended --reset 2>&1
+          $upCode = $LASTEXITCODE
+          $upOutput | ForEach-Object { Write-Host "$_" }
+          if ($upCode -ne 0) {
+              Write-Host "::error title=Tailscale up::Xác thực thất bại (exit $upCode). Kiểm tra authkey còn hạn và là loại reusable."
               exit 1
           }
           Write-Host "✅ Tailscale đã kết nối!" -ForegroundColor Green
@@ -89,12 +90,14 @@ jobs:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
-              Write-Error "❌ Thiếu secret RDP_PASSWORD"
+              Write-Host "::error title=Thiếu secret::Chưa có secret RDP_PASSWORD trong repo này."
               exit 1
           }
-          net user runneradmin "$env:RDP_PASSWORD" /active:yes
-          if ($LASTEXITCODE -ne 0) {
-              Write-Error "❌ Đặt mật khẩu thất bại (mật khẩu cần đủ độ phức tạp)"
+          $ErrorActionPreference = "Continue"
+          $netResult = net user runneradmin "$env:RDP_PASSWORD" /active:yes 2>&1
+          $netCode = $LASTEXITCODE
+          if ($netCode -ne 0) {
+              Write-Host "::error title=net user::Đặt mật khẩu thất bại: $netResult (mật khẩu cần đủ độ phức tạp)"
               exit 1
           }
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
