@@ -25,7 +25,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Continue"
           if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
-              Write-Host "::error title=Thiếu secret::Chưa có secret TAILSCALE_AUTHKEY. Fork không kế thừa secret, phải thêm trong Settings > Secrets and variables > Actions của chính repo này."
+              Write-Host "::error title=Thiếu secret::Chưa có secret TAILSCALE_AUTHKEY trong Repository secrets của repo này."
               exit 1
           }
 
@@ -37,15 +37,31 @@ jobs:
               exit 1
           }
 
-          Start-Service Tailscale -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 5
+          Write-Host "Đợi dịch vụ Tailscale sẵn sàng..."
+          for ($i = 1; $i -le 20; $i++) {
+              $svc = Get-Service Tailscale -ErrorAction SilentlyContinue
+              if ($svc -and $svc.Status -eq 'Running') { break }
+              if ($svc) { Start-Service Tailscale -ErrorAction SilentlyContinue }
+              Start-Sleep -Seconds 2
+          }
+          Start-Sleep -Seconds 3
 
-          Write-Host "Đang xác thực..."
-          $upOutput = & $ts up --authkey="$env:TS_AUTHKEY" --hostname="gh-rdp-$env:GITHUB_RUN_ID" --unattended --reset 2>&1
-          $upCode = $LASTEXITCODE
-          $upOutput | ForEach-Object { Write-Host "$_" }
+          $upCode = 1
+          $upOutput = $null
+          for ($attempt = 1; $attempt -le 3 -and $upCode -ne 0; $attempt++) {
+              Write-Host "Xác thực Tailscale, lần $attempt/3..."
+              $upOutput = & $ts up --authkey="$env:TS_AUTHKEY" --hostname="gh-rdp-$env:GITHUB_RUN_ID" --unattended --reset --timeout=60s 2>&1
+              $upCode = $LASTEXITCODE
+              $upOutput | ForEach-Object { Write-Host "$_" }
+              if ($upCode -ne 0) { Start-Sleep -Seconds 8 }
+          }
+
           if ($upCode -ne 0) {
-              Write-Host "::error title=Tailscale up::Xác thực thất bại (exit $upCode). Kiểm tra authkey còn hạn và là loại reusable."
+              Write-Host "---- Chẩn đoán ----"
+              Get-Service Tailscale -ErrorAction SilentlyContinue | Format-List Name, Status, StartType | Out-String | Write-Host
+              & $ts status 2>&1 | ForEach-Object { Write-Host "$_" }
+              $detail = (($upOutput | Out-String).Trim()) -replace '\r?\n', ' | '
+              Write-Host "::error title=Tailscale up::exit $upCode. $detail"
               exit 1
           }
           Write-Host "✅ Tailscale đã kết nối!" -ForegroundColor Green
