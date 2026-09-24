@@ -1,4 +1,4 @@
-name: cloudtrkien-rdp.yml
+name: CloudTrKien Windows RDP
 
 on:
   workflow_dispatch:
