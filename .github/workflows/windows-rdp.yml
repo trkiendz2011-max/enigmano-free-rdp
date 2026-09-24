@@ -127,7 +127,7 @@ jobs:
         $msg = "🚀 **CLOUDTRKIEN RDP STARTED!**`n" +
                "----------------------------------------------`n" +
                "📍 **IP:** $tsIP`n" +
-               "👤 **User:** `administrator``n" +
+               "👤 **User:** administrator`n" +
                "🔑 **Pass:** ${{ github.event.inputs.rdp_password }}`n" +
                "🖼️ **Wallpaper:** Loaded from Google Drive!"
         
